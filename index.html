@@ -451,14 +451,14 @@ function printMyRequests(){
     <table><thead><tr>
       <th>Item Code</th><th>Item Name</th><th>Category</th><th>Ref.</th><th>Lot No</th>
       <th>Date In</th><th>Expiry Date</th><th>Days</th>
-      <th>Supplier</th><th>Source</th><th>Unit</th><th>Size</th><th>Unit Price</th>
+      <th>Brand</th><th>Supplier</th><th>Source</th><th>Unit</th><th>Size</th><th>Unit Price</th>
       <th style="text-align:right">Opening</th><th style="text-align:right">Stock In</th>
       <th style="text-align:right">Stock Out</th><th style="text-align:right">Adj.</th>
       <th style="text-align:right">Balance</th><th style="text-align:right">Min</th>
       <th style="text-align:right">Stock Value</th>
       <th>Status</th><th>Expiry Alert</th>
       <th>Storage Condition</th><th>Storage Area</th><th>ISO Clause</th><th>Remarks</th><th></th>
-    </tr></thead><tbody id="inv-body"><tr><td colspan="27"><div class="loading"><i class="ti ti-loader-2"></i> Loading...</div></td></tr></tbody></table>
+    </tr></thead><tbody id="inv-body"><tr><td colspan="28"><div class="loading"><i class="ti ti-loader-2"></i> Loading...</div></td></tr></tbody></table>
   </div>
 </div>
 
@@ -956,6 +956,52 @@ function printMyRequests(){
 </div>
 
 <!-- ===== USER MANAGEMENT (Admin) ===== -->
+<div class="page" id="page-list-mgmt">
+  <h2><i class="ti ti-list-check" style="color:var(--blue)"></i> List Management</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+    <!-- Storage Areas -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-building-warehouse" style="color:var(--blue)"></i> Storage Areas</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('storage_area')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-storage-area"></div>
+    </div>
+    <!-- Storage Conditions -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-temperature" style="color:var(--orange)"></i> Storage Conditions</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('storage_condition')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-storage-condition"></div>
+    </div>
+    <!-- Suppliers -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-truck" style="color:var(--green)"></i> Suppliers</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('supplier')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-supplier"></div>
+    </div>
+    <!-- Sources -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-tag" style="color:var(--red)"></i> Sources</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('source')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-source"></div>
+    </div>
+    <!-- Brands -->
+    <div class="card" style="grid-column:1/-1">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-certificate" style="color:#7c3aed"></i> Brands / Instruments</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('brand')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-brand" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px"></div>
+    </div>
+  </div>
+</div>
+
 <div class="page" id="page-users">
   <div class="page-header">
     <h2><i class="ti ti-users" style="color:var(--blue)"></i> User Management</h2>
@@ -1042,13 +1088,14 @@ const db=createClient(SB_URL,SB_KEY);
   }
 })();
 
-const CATS=['Chemistry','Hematology','Microbiology','Sero/Immu','GeneXpert','Consumables','Blood Bank','Other'];
-const DEPTS=['Hematology','Chemistry','Microbiology','Sero/Immu','GeneXpert','Blood Bank','Specimen Receiving','Collection'];
+const CATS=['Chemistry','Hematology','Microbiology','Sero/Immu','Molecular','Consumables','Blood Bank','Other'];
+const DEPTS=['Hematology','Chemistry','Microbiology','Sero/Immu','Molecular','Blood Bank','Specimen Receiving','Collection'];
 const WARDS=['ED','MICU','SICU','OBGY','PEDs','SUR','DMID','ENT','ANES','OPD'];
 const SOURCES=['TSNH','CMS','លទ្ធកម្ម','Free'];
 const STORAGE=['Room temp (20–30°C)','2–8°C (Refrigerator)','-20°C (Freezer)','Other'];
 const AREAS=['Store room Stock','Room Stock Micro','Room Storage Specimen (flammable)','H7','Refri #1 Stock','Refri #2 Stock','Refri #3 Stock','Refri #4 Stock','Refri #5 Stock','Freezer -20°C General','Freezer -20°C Micro','Other'];
 let DYN_SUPPLIERS=[];
+var DYN_BRANDS=[];
 let DYN_STORAGE=[...STORAGE];
 let DYN_AREAS=[...AREAS];
 
@@ -1141,7 +1188,7 @@ function doLogout(){CU=null;batchItems=[];document.getElementById('main-app').st
 
 // ===== META (load items, users, wards for dropdowns) =====
 async function loadMeta(){
-  let {data:items}=await db.from('items').select('code,name,category,ref,lot,expiry,unit,size,balance,min_stock,storage_condition,storage_area,unit_price,supplier,source').order('code');
+  let {data:items}=await db.from('items').select('code,name,category,ref,lot,expiry,unit,size,balance,min_stock,storage_condition,storage_area,unit_price,supplier,source,brand').order('code');
   allItems=items||[];
   refreshDynLists();
   let {data:users}=await db.from('app_users').select('*').order('full_name');
@@ -1206,7 +1253,8 @@ function setupNav(){
       <div class="nav-item" data-page="report"><i class="ti ti-chart-bar"></i> Report</div>
       <div class="nav-section">Admin</div>
       <div class="nav-item" data-page="users"><i class="ti ti-users"></i> User Management</div>
-      <div class="nav-item" data-page="visibility"><i class="ti ti-eye"></i> Item Visibility</div>`;
+      <div class="nav-item" data-page="visibility"><i class="ti ti-eye"></i> Item Visibility</div>
+      <div class="nav-item" data-page="list-mgmt"><i class="ti ti-list-check"></i> List Management</div>`;
   } else {
     nav.innerHTML=`
       <div class="nav-item" data-page="my-dashboard"><i class="ti ti-layout-dashboard"></i> Dashboard</div>
@@ -1240,6 +1288,7 @@ function goPage(p){
   else if(p==='alerts')loadAlerts();
   else if(p==='report')loadReport();
   else if(p==='users')loadUsers();
+  else if(p==='list-mgmt')loadListMgmt();
   else if(p==='visibility')loadVisibility();
   else if(p==='po-request')loadPOList();
 }
@@ -1403,7 +1452,7 @@ async function loadInventory(){
   if(cat)q=q.eq('category',cat);
   if(src)q=q.eq('source',src);
   let {data:items}=await q;
-  if(!items){document.getElementById('inv-body').innerHTML='<tr><td colspan="27"><div class="empty">Error</div></td></tr>';return}
+  if(!items){document.getElementById('inv-body').innerHTML='<tr><td colspan="28"><div class="empty">Error</div></td></tr>';return}
   if(search)items=items.filter(i=>`${i.code}${i.name}${i.category}${i.ref||''}`.toLowerCase().includes(search.toLowerCase()));
   if(status)items=items.filter(i=>(i.balance<=i.min_stock?'REORDER':'OK')===status);
   allItems=items;
@@ -1429,7 +1478,7 @@ async function loadInventory(){
       <td style="font-size:12px;white-space:nowrap">${fd(i.date_in)}</td>
       <td style="font-size:12px;white-space:nowrap">${fd(i.expiry)}${expBadge}</td>
       <td style="font-size:12px;color:${dc};font-weight:600;text-align:right">${d===9999?'-':d<0?'Exp':d}</td>
-      <td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
+      <td style="font-size:12px">${i.brand||'-'}</td><td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
       <td style="font-size:12px">${i.unit||''}</td><td style="font-size:12px">${i.size||'-'}</td>
       <td style="font-size:12px;text-align:right">${i.unit_price||0}</td>
       <td style="text-align:right;font-size:12px">${i.opening_stock||0}</td>
@@ -1449,10 +1498,10 @@ async function loadInventory(){
         <button class="btn btn-sm btn-danger" onclick="deleteItem('${i.code}','${i.name.replace(/'/g,`\\'`)}')"><i class="ti ti-trash"></i></button>
       </td>
     </tr>`;
-  }).join('')+(items.length>50?`<tr><td colspan="27" style="text-align:center;padding:12px">
+  }).join('')+(items.length>50?`<tr><td colspan="28" style="text-align:center;padding:12px">
     <span style="font-size:12px;color:var(--muted)">បង្ហាញ 50/${items.length} items — </span>
     <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600" onclick="showAllItems()">មើលទាំងអស់ ${items.length} items →</span>
-  </td></tr>`:'')+`<tr style="display:none" id="inv-all-trigger"></tr>`:`<tr><td colspan="27"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>`;
+  </td></tr>`:'')+`<tr style="display:none" id="inv-all-trigger"></tr>`:`<tr><td colspan="28"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>`;
 }
 
 function showAllItems(){
@@ -1480,7 +1529,7 @@ function showAllItems(){
       <td style="font-size:12px;white-space:nowrap">${fd(i.date_in)}</td>
       <td style="font-size:12px;white-space:nowrap">${fd(i.expiry)}${expBadge}</td>
       <td style="font-size:12px;text-align:right;color:${dc};font-weight:600">${d===9999?'-':d<0?'Exp':d}</td>
-      <td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
+      <td style="font-size:12px">${i.brand||'-'}</td><td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
       <td style="font-size:12px">${i.unit||'-'}</td><td style="font-size:12px">${i.size||'-'}</td>
       <td style="font-size:12px;text-align:right">${i.unit_price||0}</td>
       <td style="font-size:12px;text-align:right">${i.opening_stock||0}</td>
@@ -1503,49 +1552,138 @@ function showAllItems(){
   }).join('');
 }
 
-function openAddItem(){
+async function openAddItem(){
   refreshDynLists();
-  let oc=CATS.map(c=>`<option>${c}</option>`).join('');
+  // Auto-generate item code based on category prefix
+  var autoCode=await generateItemCode('H');
+  var oc=CATS.map(c=>`<option>${c}</option>`).join('');
+  // Build source options from DB list
+  var srcOpts=(_listCache.source&&_listCache.source.length?_listCache.source.map(d=>d.value):SOURCES);
   openModal(`<h3><i class="ti ti-plus" style="color:var(--blue)"></i> Add New Item</h3>
   <div class="form-grid">
-    <div class="form-group"><label>Item Code *</label><input id="ni-code" placeholder="H003..."></div>
-    <div class="form-group"><label>Item Name *</label><input id="ni-name"></div>
-    <div class="form-group"><label>Category</label><select id="ni-cat">${oc}</select></div>
-    <div class="form-group"><label>Ref.</label><input id="ni-ref"></div>
-    <div class="form-group"><label>Lot No</label><input id="ni-lot"></div>
-    <div class="form-group"><label>Date Incoming</label><input id="ni-datein" type="date"></div>
-    <div class="form-group"><label>Expiry Date</label><input id="ni-exp" type="date"></div>
-    <div class="form-group"><label>Supplier</label>${comboField('ni-sup','',DYN_SUPPLIERS,'Supplier...')}</div>
-    <div class="form-group"><label>Source</label>${comboField('ni-src','',SOURCES,'Source...')}</div>
+    <div class="form-group" style="grid-column:1/-1">
+      <label>Category *</label>
+      <select id="ni-cat" onchange="updateItemCodePrefix()" style="font-weight:600">
+        ${CATS.map((c,i)=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Item Code *
+        <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:6px">(Auto)</span>
+      </label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="ni-code" value="${autoCode}" style="font-weight:700;color:var(--blue);letter-spacing:.05em;flex:1" placeholder="e.g. XA0001">
+        <button class="btn btn-sm" onclick="refreshItemCode()" title="Generate new code" style="white-space:nowrap"><i class="ti ti-refresh"></i></button>
+      </div>
+      <div id="ni-code-check" style="font-size:11px;margin-top:3px"></div>
+    </div>
+    <div class="form-group"><label>Item Name *</label><input id="ni-name" placeholder="Reagent name..."></div>
     <div class="form-group"><label>Unit</label><input id="ni-unit" placeholder="Pack, Kit, Box..."></div>
     <div class="form-group"><label>Size</label><input id="ni-size" placeholder="20L, 100T..."></div>
-    <div class="form-group"><label>Unit Price ($)</label><input id="ni-price" type="number" value="0"></div>
-    <div class="form-group"><label>Opening Stock</label><input id="ni-open" type="number" value="0"></div>
-    <div class="form-group"><label>Minimum Stock</label><input id="ni-min" type="number" value="5"></div>
+    <div class="form-group"><label>Unit Price ($)</label><input id="ni-price" type="number" value="0" min="0" step="0.01"></div>
+    <div class="form-group"><label>Brand / Instrument</label>${comboField('ni-brand','',(_listCache.brand&&_listCache.brand.length?_listCache.brand.map(d=>d.value):DYN_BRANDS),'Brand...')}</div>
+    <div class="form-group"><label>Supplier</label>${comboField('ni-sup','',DYN_SUPPLIERS,'Supplier...')}</div>
+    <div class="form-group"><label>Source</label>${comboField('ni-src','',srcOpts,'Source...')}</div>
     <div class="form-group"><label>Storage Condition</label>${comboField('ni-sto','',DYN_STORAGE,'Storage condition...')}</div>
     <div class="form-group"><label>Storage Area</label>${comboField('ni-area','',DYN_AREAS,'Storage area...')}</div>
+    <div class="form-group"><label>Opening Stock</label><input id="ni-open" type="number" value="0" min="0"></div>
+    <div class="form-group"><label>Minimum Stock</label><input id="ni-min" type="number" value="5" min="0"></div>
     <div class="form-group"><label>ISO 15189 Clause</label><input id="ni-iso" value="8.4"></div>
     <div class="form-group"><label>Remarks</label><input id="ni-rem"></div>
   </div>
-  <div class="modal-footer"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveNewItem()"><i class="ti ti-check"></i> Save</button></div>`);
+  <div class="modal-footer">
+    <button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveNewItem()"><i class="ti ti-plus"></i> Create Item</button>
+  </div>`);
+  // Check code uniqueness on type
+  document.getElementById('ni-code')?.addEventListener('input',debounceCheckCode);
+}
+
+// Category prefix map
+var CAT_PREFIX={'Chemistry':'XA','Hematology':'XB','Microbiology':'XC','Sero/Immu':'XD','Molecular':'XE','Consumables':'XF','Blood Bank':'XG','Other':'XH'};
+
+async function generateItemCode(prefix){
+  // Find highest existing code with this prefix
+  var {data}=await db.from('items').select('code').ilike('code',prefix+'%').order('code',{ascending:false}).limit(1);
+  if(!data||!data.length){
+    // pad to 4 digits
+    return prefix+String(1).padStart(4,'0');
+  }
+  var last=data[0].code;
+  var num=parseInt(last.replace(/[^0-9]/g,''))||0;
+  return prefix+String(num+1).padStart(4,'0');
+}
+
+async function updateItemCodePrefix(){
+  var cat=document.getElementById('ni-cat')?.value||'Other';
+  var prefix=CAT_PREFIX[cat]||'XH';
+  var code=await generateItemCode(prefix);
+  var inp=document.getElementById('ni-code');
+  if(inp)inp.value=code;
+  checkCodeUnique(code);
+}
+
+async function refreshItemCode(){
+  var cat=document.getElementById('ni-cat')?.value||'Other';
+  var prefix=CAT_PREFIX[cat]||'XH';
+  var code=await generateItemCode(prefix);
+  var inp=document.getElementById('ni-code');
+  if(inp){inp.value=code;checkCodeUnique(code);}
+}
+
+var _codeCheckTimer=null;
+function debounceCheckCode(e){
+  clearTimeout(_codeCheckTimer);
+  _codeCheckTimer=setTimeout(()=>checkCodeUnique(e.target.value.trim()),400);
+}
+
+async function checkCodeUnique(code){
+  var el=document.getElementById('ni-code-check');
+  if(!el||!code)return;
+  var {data}=await db.from('items').select('code').eq('code',code).limit(1);
+  if(data&&data.length){
+    el.innerHTML='<span style="color:var(--red)">⚠️ Code នេះមានរួចហើយ!</span>';
+  } else {
+    el.innerHTML='<span style="color:var(--green)">✓ Code អាចប្រើបាន</span>';
+  }
 }
 async function saveNewItem(){
-  let code=document.getElementById('ni-code').value.trim();
-  let name=document.getElementById('ni-name').value.trim();
-  if(!code||!name){toast('Code និង Name ត្រូវតែបញ្ចូល!','error');return}
+  let code=(document.getElementById('ni-code').value||'').trim().toUpperCase();
+  let name=(document.getElementById('ni-name').value||'').trim();
+  if(!code){toast('Item Code ត្រូវតែបញ្ចូល!','error');return}
+  if(!name){toast('Item Name ត្រូវតែបញ្ចូល!','error');return}
+  // Check duplicate
+  let {data:exist}=await db.from('items').select('code').eq('code',code).limit(1);
+  if(exist&&exist.length){toast('⚠️ Code "'+code+'" មានរួចហើយ! ចុច Refresh ដើម្បីបាន Code ថ្មី','error');return}
+  let btn=document.querySelector('.modal-footer .btn-primary');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Creating...';}
   let open=parseInt(document.getElementById('ni-open').value)||0;
   let {error}=await db.from('items').insert({
-    code,name,category:document.getElementById('ni-cat').value,ref:document.getElementById('ni-ref').value,
-    lot:document.getElementById('ni-lot').value,date_in:document.getElementById('ni-datein').value||null,
-    expiry:document.getElementById('ni-exp').value||null,supplier:comboVal('ni-sup'),
-    source:comboVal('ni-src'),unit:document.getElementById('ni-unit').value,
-    size:document.getElementById('ni-size').value,unit_price:parseFloat(document.getElementById('ni-price').value)||0,
-    opening_stock:open,balance:open,min_stock:parseInt(document.getElementById('ni-min').value)||5,
-    storage_condition:comboVal('ni-sto'),storage_area:comboVal('ni-area'),
-    iso_clause:document.getElementById('ni-iso').value,remarks:document.getElementById('ni-rem').value
+    code,
+    name,
+    brand:comboVal('ni-brand'),
+    category:document.getElementById('ni-cat').value,
+    supplier:comboVal('ni-sup'),
+    source:comboVal('ni-src'),
+    unit:document.getElementById('ni-unit').value||'',
+    size:document.getElementById('ni-size').value||'',
+    unit_price:parseFloat(document.getElementById('ni-price').value)||0,
+    opening_stock:open,
+    balance:open,
+    min_stock:parseInt(document.getElementById('ni-min').value)||5,
+    storage_condition:comboVal('ni-sto'),
+    storage_area:comboVal('ni-area'),
+    iso_clause:document.getElementById('ni-iso').value||'8.4',
+    remarks:document.getElementById('ni-rem').value||''
   });
-  if(error){toast('Error: '+(error.code==='23505'?'Code នេះមានរួចហើយ!':error.message),'error');return}
-  closeModal();loadInventory();toast('Item '+code+' បានបន្ថែម!');
+  if(error){
+    toast('Error: '+(error.code==='23505'?'Code នេះមានរួចហើយ!':error.message),'error');
+    if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-plus"></i> Create Item';}
+    return;
+  }
+  closeModal();
+  await loadInventory();
+  toast('✅ Item ['+code+'] '+name+' បានបន្ថែមក្នុង Master Inventory!','success');
 }
 async function deleteItem(code,name){
   // Step 1: First confirmation
@@ -1588,6 +1726,7 @@ async function openEditItem(code){
     <div class="form-group"><label>Lot No</label><input id="ei-lot" value="${i.lot||''}"></div>
     <div class="form-group"><label>Date Incoming</label><input id="ei-datein" type="date" value="${i.date_in||''}"></div>
     <div class="form-group"><label>Expiry Date</label><input id="ei-exp" type="date" value="${i.expiry||''}"></div>
+    <div class="form-group"><label>Brand / Instrument</label>${comboField('ei-brand',i.brand||'',[...DYN_BRANDS],'Brand...')}</div>
     <div class="form-group"><label>Supplier</label>${comboField('ei-sup',i.supplier||'',[...DYN_SUPPLIERS],'Supplier...')}</div>
     <div class="form-group"><label>Source</label>${comboField('ei-src',i.source||'',[...SOURCES],'Source...')}</div>
     <div class="form-group"><label>Unit Price ($)</label><input id="ei-price" type="number" value="${i.unit_price||0}"></div>
@@ -1609,7 +1748,7 @@ async function saveEdit(code,oldBal){
   let {error}=await db.from('items').update({
     name:document.getElementById('ei-name').value,ref:document.getElementById('ei-ref').value,
     lot:document.getElementById('ei-lot').value,date_in:document.getElementById('ei-datein').value||null,
-    expiry:document.getElementById('ei-exp').value||null,supplier:comboVal('ei-sup'),source:comboVal('ei-src'),
+    expiry:document.getElementById('ei-exp').value||null,brand:comboVal('ei-brand'),supplier:comboVal('ei-sup'),source:comboVal('ei-src'),
     unit_price:parseFloat(document.getElementById('ei-price').value)||0,
     min_stock:parseInt(document.getElementById('ei-min').value)||0,
     balance:oldBal+adj,adjustment:adj,
@@ -5213,6 +5352,128 @@ function exportCSV(){
 }
 
 // ===== USER MANAGEMENT =====
+
+// ===== LIST MANAGEMENT =====
+var _listCache={};
+
+var LIST_CONFIG={
+  storage_area:{label:'Storage Area',icon:'ti-building-warehouse',color:'var(--blue)',table:'app_settings',key:'storage_area'},
+  storage_condition:{label:'Storage Condition',icon:'ti-temperature',color:'var(--orange)',table:'app_settings',key:'storage_condition'},
+  supplier:{label:'Supplier',icon:'ti-truck',color:'var(--green)',table:'app_settings',key:'supplier'},
+  source:{label:'Source',icon:'ti-tag',color:'var(--red)',table:'app_settings',key:'source'},
+  brand:{label:'Brand',icon:'ti-certificate',color:'#7c3aed',table:'app_settings',key:'brand'}
+};
+
+async function loadListMgmt(){
+  var types=Object.keys(LIST_CONFIG);
+  for(var t of types){
+    await renderListSection(t);
+  }
+}
+
+async function getListItems(type){
+  var {data,error}=await db.from('app_settings').select('*').eq('type',type).order('value');
+  if(error){
+    // table may not exist yet
+    return[];
+  }
+  _listCache[type]=data||[];
+  // sync to DYN_ arrays
+  if(type==='storage_area')DYN_AREAS=(data||[]).map(d=>d.value);
+  if(type==='storage_condition')DYN_STORAGE=(data||[]).map(d=>d.value);
+  if(type==='supplier')DYN_SUPPLIERS=(data||[]).map(d=>d.value);
+  if(type==='brand')DYN_BRANDS=(data||[]).map(d=>d.value);
+  return data||[];
+}
+
+async function renderListSection(type){
+  var cfg=LIST_CONFIG[type];
+  var el=document.getElementById('list-'+type);
+  if(!el)return;
+  var items=await getListItems(type);
+  if(items.length===0){
+    el.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted);font-size:13px">គ្មានទិន្នន័យ — ចុច Add ដើម្បីបន្ថែម</div>';
+    return;
+  }
+  el.innerHTML=items.map((item,idx)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--bg);margin-bottom:6px">
+      <span style="flex:1;font-size:13px;font-weight:500">${item.value}</span>
+      <button class="btn btn-sm" onclick="openEditListItem('${type}','${item.id}','${item.value.replace(/'/g,"\'")}')"><i class="ti ti-edit"></i></button>
+      <button class="btn btn-sm" style="color:var(--red)" onclick="deleteListItem('${type}','${item.id}','${item.value.replace(/'/g,"\'")}')"><i class="ti ti-trash"></i></button>
+    </div>`).join('');
+}
+
+function openAddListItem(type){
+  var cfg=LIST_CONFIG[type];
+  openModal(`<h3><i class="ti ${cfg.icon}" style="color:${cfg.color}"></i> Add ${cfg.label}</h3>
+    <div class="form-group"><label>${cfg.label}</label><input id="list-val-input" placeholder="Enter value..." style="width:100%"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveListItem('${type}',null)"><i class="ti ti-check"></i> Save</button>
+    </div>`);
+  setTimeout(()=>document.getElementById('list-val-input')?.focus(),100);
+}
+
+function openEditListItem(type,id,currentVal){
+  var cfg=LIST_CONFIG[type];
+  openModal(`<h3><i class="ti ${cfg.icon}" style="color:${cfg.color}"></i> Edit ${cfg.label}</h3>
+    <div class="form-group"><label>${cfg.label}</label><input id="list-val-input" value="${currentVal}" style="width:100%"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveListItem('${type}','${id}')"><i class="ti ti-check"></i> Save</button>
+    </div>`);
+  setTimeout(()=>document.getElementById('list-val-input')?.focus(),100);
+}
+
+async function saveListItem(type,id){
+  var val=(document.getElementById('list-val-input')?.value||'').trim();
+  if(!val){toast('សូមបញ្ចូលតម្លៃ!','error');return;}
+  var btn=document.querySelector('.modal-footer .btn-primary');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Saving...';}
+  var error;
+  if(id){
+    var res=await db.from('app_settings').update({value:val,updated_at:new Date().toISOString()}).eq('id',id);
+    error=res.error;
+  } else {
+    var res=await db.from('app_settings').insert({type:type,value:val});
+    error=res.error;
+  }
+  if(error){toast('Error: '+error.message,'error');if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-check"></i> Save';}return;}
+  toast((id?'កែ':'បន្ថែម')+' '+LIST_CONFIG[type].label+' រួចហើយ!','success');
+  closeModal();
+  await renderListSection(type);
+  refreshDynLists();
+}
+
+async function deleteListItem(type,id,val){
+  if(!confirm('Delete "'+val+'" ?'))return;
+  var {error}=await db.from('app_settings').delete().eq('id',id);
+  if(error){toast('Error: '+error.message,'error');return;}
+  toast('Deleted "'+val+'"','success');
+  await renderListSection(type);
+  refreshDynLists();
+}
+
+// Override refreshDynLists to also pull from DB when available
+var _origRefreshDynLists=refreshDynLists;
+refreshDynLists=function(){
+  _origRefreshDynLists();
+  // Merge DB lists if cached
+  if(_listCache.storage_area&&_listCache.storage_area.length)DYN_AREAS=[..._listCache.storage_area.map(d=>d.value)];
+  if(_listCache.storage_condition&&_listCache.storage_condition.length)DYN_STORAGE=[..._listCache.storage_condition.map(d=>d.value)];
+  if(_listCache.supplier&&_listCache.supplier.length)DYN_SUPPLIERS=[..._listCache.supplier.map(d=>d.value)];
+  if(_listCache.brand&&_listCache.brand.length)DYN_BRANDS=[..._listCache.brand.map(d=>d.value)];
+};
+
+// Load DB lists on startup after meta loads
+var _origPopulateSelects=populateSelects;
+populateSelects=async function(){
+  _origPopulateSelects();
+  // Pre-load lists from DB
+  await Promise.all(Object.keys(LIST_CONFIG).map(t=>getListItems(t)));
+  rebuildScanSupDropdown&&rebuildScanSupDropdown();
+};
+
 async function loadUsers(){
   let {data:users}=await db.from('app_users').select('*').order('role').order('full_name');
   let el=document.getElementById('users-body');if(!el)return;
