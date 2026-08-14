@@ -178,7 +178,8 @@ function doPrint(htmlContent){
   if(existingFrame)existingFrame.remove();
   let frame=document.createElement('iframe');
   frame.id='print-frame';
-  frame.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none';
+  let hiddenStyle='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;pointer-events:none;z-index:-1';
+  frame.style.cssText=hiddenStyle;
   document.body.appendChild(frame);
   let doc=frame.contentDocument||frame.contentWindow.document;
   doc.open();
@@ -217,13 +218,28 @@ function doPrint(htmlContent){
     @page{margin:8mm;size:A4 landscape}
   </style></head><body>${htmlContent}</body></html>`);
   doc.close();
+  // Safety net: whatever happens (onload never fires, print() throws, dialog is cancelled
+  // in an unusual way), guarantee the frame is put back off-screen and non-interactive
+  // so it can NEVER get stuck covering the page and blocking scroll/clicks.
+  let resetFrame=function(){
+    let f=document.getElementById('print-frame');
+    if(f)f.style.cssText=hiddenStyle;
+  };
+  let safetyTimer=setTimeout(resetFrame,4000);
   frame.onload=function(){
-    frame.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;border:none';
-    setTimeout(()=>{
-      frame.contentWindow.focus();
-      frame.contentWindow.print();
-      setTimeout(()=>{frame.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none'},1000);
-    },300);
+    try{
+      frame.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;border:none;pointer-events:none;z-index:-1';
+      setTimeout(()=>{
+        try{
+          frame.contentWindow.focus();
+          frame.contentWindow.print();
+        }catch(e){console.error('[doPrint] print() failed:',e);}
+        setTimeout(()=>{clearTimeout(safetyTimer);resetFrame();},1000);
+      },300);
+    }catch(e){
+      console.error('[doPrint] onload handler failed:',e);
+      clearTimeout(safetyTimer);resetFrame();
+    }
   };
 }
 
@@ -430,10 +446,12 @@ function printMyRequests(){
 <div class="page" id="page-inventory">
   <div class="page-header">
     <h2><i class="ti ti-package" style="color:var(--blue)"></i> Master Inventory</h2>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn" onclick="printInventory()"><i class="ti ti-printer"></i> Print</button>
       <button class="btn btn-success" onclick="exportInventoryExcel()"><i class="ti ti-file-spreadsheet"></i> Export Excel</button>
       <button class="btn btn-primary" onclick="openAddItem()"><i class="ti ti-plus"></i> Add Item</button>
+      <div style="width:1px;height:24px;background:var(--border);margin:0 2px"></div>
+
     </div>
   </div>
   <div class="search-bar">
@@ -446,19 +464,18 @@ function printMyRequests(){
       <option value="">ទាំងអស់ Status</option><option>OK</option><option>REORDER</option>
     </select>
   </div>
-  <div style="padding:4px 2px;margin-bottom:6px" id="inv-counter"></div>
+  <div id="inv-counter" style="padding:4px 2px;margin-bottom:6px"></div>
+  <!-- Monthly Tab Strip -->
+  <div id="monthly-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <select id="inv-monthly-sel" onchange="onMonthlySelChange()" style="padding:7px 14px;border:2px solid #7c3aed;border-radius:8px;font-size:13px;background:var(--card);color:#7c3aed;font-weight:600;cursor:pointer;min-width:200px"><option value="">Normal Mode</option></select>
+    <button class="btn btn-sm" onclick="if(typeof loadInventory==='function'){loadInventory(true);}else{goPage('inventory');}" style="padding:5px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue)" title="Refresh data"><i class="ti ti-refresh"></i> Refresh</button>
+    <button id="btn-close-month" class="btn btn-sm" style="display:none;background:#185fa5;color:#fff;border-color:#185fa5" onclick="openCloseMonthDialog()"><i class="ti ti-lock"></i> Close Month</button>
+    <span id="monthly-lock-badge" style="display:none;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:#fee2e2;color:#dc2626">Locked</span>
+  </div>
+  <select id="inv-monthly-month" style="display:none"></select>
+  <select id="inv-monthly-year" style="display:none"></select>
   <div class="tbl-wrap">
-    <table><thead><tr>
-      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Ref.</th><th>Lot No</th>
-      <th>Date In</th><th>Expiry Date</th><th>Days</th>
-      <th>Brand</th><th>Supplier</th><th>Source</th><th>Unit</th><th>Size</th><th>Unit Price</th>
-      <th style="text-align:right">Opening</th><th style="text-align:right">Stock In</th>
-      <th style="text-align:right">Stock Out</th><th style="text-align:right">Adj.</th>
-      <th style="text-align:right">Balance</th><th style="text-align:right">Min</th>
-      <th style="text-align:right">Stock Value</th>
-      <th>Status</th><th>Expiry Alert</th>
-      <th>Storage Condition</th><th>Storage Area</th><th>ISO Clause</th><th>Remarks</th><th></th>
-    </tr></thead><tbody id="inv-body"><tr><td colspan="28"><div class="loading"><i class="ti ti-loader-2"></i> Loading...</div></td></tr></tbody></table>
+    <table><thead id="inv-head"></thead><tbody id="inv-body"><tr><td colspan="33"><div class="loading"><i class="ti ti-loader-2"></i> Loading...</div></td></tr></tbody></table>
   </div>
 </div>
 
@@ -634,8 +651,38 @@ function printMyRequests(){
 <div class="page" id="page-requests-admin">
   <div class="page-header">
     <h2><i class="ti ti-clipboard-list" style="color:var(--blue)"></i> Request Management</h2>
-    <button class="btn" onclick="printRequests()"><i class="ti ti-printer"></i> Print</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="printReqTurnaround()"><i class="ti ti-printer"></i> Print Turnaround</button>
+      <button class="btn" onclick="printRequests()"><i class="ti ti-printer"></i> Print</button>
+    </div>
   </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">
+    <i class="ti ti-clock-hour-4" style="color:#185fa5"></i> Request Turnaround
+  </div>
+  <div class="stats-grid" id="req-turn-stats"></div>
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:14px 0 8px">
+    <i class="ti ti-alert-triangle" style="color:#a32d2d"></i> Request កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ
+  </div>
+  <div class="tbl-wrap" style="margin-bottom:18px">
+    <table><thead><tr>
+      <th>Req No</th><th>Date</th><th>Department</th><th>Ward</th>
+      <th>Requested By</th><th style="text-align:right">រង់ចាំ (ថ្ងៃ)</th><th>Status</th>
+    </tr></thead>
+    <tbody id="req-turn-overdue-body"></tbody></table>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:14px 0 8px">
+    <i class="ti ti-package" style="color:#0f6e56"></i> Pending by Item — Item ណាដែលកំពុងរង់ចាំច្រើនបំផុត
+  </div>
+  <div class="tbl-wrap" style="margin-bottom:18px">
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Department/Ward</th>
+      <th style="text-align:right"># Requests</th><th style="text-align:right">Total Qty Pending</th>
+    </tr></thead>
+    <tbody id="req-turn-pending-item-body"></tbody></table>
+  </div>
+
   <div class="search-bar">
     <select id="req-filter-status" onchange="loadAdminRequests()" style="width:140px">
       <option value="">ទាំងអស់ Status</option><option>Pending</option><option>Approved</option><option>Rejected</option>
@@ -712,7 +759,17 @@ function printMyRequests(){
 <div class="page" id="page-my-dashboard">
   <div class="page-header">
     <h2><i class="ti ti-layout-dashboard" style="color:var(--blue)"></i> Balance Dashboard</h2>
-    <div style="font-size:12px;color:var(--muted)">Department: <strong id="my-dash-dept"></strong></div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="font-size:12px;color:var(--muted)">Department: <strong id="my-dash-dept"></strong></div>
+      <button class="btn btn-sm" onclick="printMyDashboard()"><i class="ti ti-printer"></i> Print</button>
+    </div>
+  </div>
+  <div id="my-dash-counter" style="padding:4px 2px;margin-bottom:6px"></div>
+  <!-- Monthly Tab Strip (read-only view, same formula as Master Inventory) -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <select id="my-dash-monthly-sel" onchange="onMyMonthlySelChange()" style="padding:7px 14px;border:2px solid #7c3aed;border-radius:8px;font-size:13px;background:var(--card);color:#7c3aed;font-weight:600;cursor:pointer;min-width:200px"><option value="">Normal Mode</option></select>
+    <button class="btn btn-sm" onclick="loadMyDashboard()" style="padding:5px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue)" title="Refresh data"><i class="ti ti-refresh"></i> Refresh</button>
+    <span id="my-dash-lock-badge" style="display:none;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:#fee2e2;color:#dc2626">Locked</span>
   </div>
   <!-- Stats -->
   <div class="stats-grid" id="my-dash-stats"></div>
@@ -743,6 +800,7 @@ function printMyRequests(){
       <th style="text-align:right">Stock Out</th>
       <th style="text-align:right">Balance</th>
       <th>Status</th>
+      <th></th>
     </tr></thead>
     <tbody id="my-dash-body"></tbody></table>
   </div>
@@ -835,6 +893,120 @@ function printMyRequests(){
       <th style="text-align:right">Qty</th><th>Source</th><th>By</th>
     </tr></thead>
     <tbody id="my-so-body"></tbody></table>
+  </div>
+</div>
+
+<div class="page" id="page-my-usage">
+  <div class="page-header">
+    <h2><i class="ti ti-chart-histogram" style="color:#0f6e56"></i> My Monthly Usage Summary</h2>
+    <div style="font-size:12px;color:var(--muted)">សង្ខេបការប្រើប្រាស់ប្រចាំខែ — <span id="mu-dept-label"></span></div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <select id="mu-month" onchange="loadMyUsageSummary()" style="width:160px">
+      <option value="">ខែនេះ</option>
+    </select>
+    <select id="mu-cat" onchange="loadMyUsageSummary()" style="width:150px">
+      <option value="">ទាំងអស់ Category</option>
+      <option>Hematology</option><option>Chemistry</option><option>Microbiology</option>
+      <option>Sero/Immu</option><option>GeneXpert</option><option>Blood Bank</option><option>Consumables</option>
+    </select>
+    <button class="btn btn-sm" onclick="document.getElementById('mu-month').value='';document.getElementById('mu-cat').value='';loadMyUsageSummary()">Clear</button>
+    <button class="btn btn-sm" onclick="printMyUsage()" style="margin-left:auto"><i class="ti ti-printer"></i> Print</button>
+    <button class="btn btn-sm" onclick="exportMyUsageCSV()"><i class="ti ti-download"></i> CSV</button>
+  </div>
+
+  <div class="stats-grid" id="mu-stats"></div>
+
+  <div class="two-col" style="margin-top:14px">
+    <div class="card">
+      <h3>តាម Category</h3>
+      <div class="tbl-wrap">
+        <table><thead><tr>
+          <th>Category</th><th style="text-align:right">Item ចំនួន</th>
+          <th style="text-align:right">Transactions</th><th style="text-align:right">Total Qty</th>
+        </tr></thead>
+        <tbody id="mu-cat-body"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Top 10 Item ប្រើប្រាស់ច្រើនបំផុត</h3>
+      <div class="tbl-wrap">
+        <table><thead><tr>
+          <th>Item Code</th><th>Item Name</th><th>Category</th>
+          <th style="text-align:right">Qty</th><th>Unit</th>
+        </tr></thead>
+        <tbody id="mu-top-body"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-my-turnaround">
+  <div class="page-header">
+    <h2><i class="ti ti-clock-hour-4" style="color:#185fa5"></i> Request Turnaround Report</h2>
+    <div style="font-size:12px;color:var(--muted)">តាមដានល្បឿននៃការ Approve/Reject request — <span id="mt-dept-label"></span></div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <select id="mt-month" onchange="loadMyTurnaround()" style="width:160px">
+      <option value="">ទាំងអស់ Month</option>
+    </select>
+    <button class="btn btn-sm" onclick="document.getElementById('mt-month').value='';loadMyTurnaround()">Clear</button>
+    <button class="btn btn-sm" onclick="printMyTurnaround()" style="margin-left:auto"><i class="ti ti-printer"></i> Print</button>
+  </div>
+
+  <div class="stats-grid" id="mt-stats"></div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:14px 0 8px">
+    <i class="ti ti-alert-triangle" style="color:#a32d2d"></i> Request កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ
+  </div>
+  <div class="tbl-wrap">
+    <table><thead><tr>
+      <th>Req No</th><th>Date</th><th>Item</th><th>Qty</th><th style="text-align:right">រង់ចាំ (ថ្ងៃ)</th><th>Status</th>
+    </tr></thead>
+    <tbody id="mt-overdue-body"></tbody></table>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:18px 0 8px">📋 ប្រវត្តិ Request ទាំងអស់</div>
+  <div class="tbl-wrap">
+    <table><thead><tr>
+      <th>Req No</th><th>Date</th><th>Item</th><th>Qty</th><th>Status</th>
+      <th style="text-align:right">ចំនួនថ្ងៃរហូតដល់ Approved</th>
+    </tr></thead>
+    <tbody id="mt-body"></tbody></table>
+  </div>
+</div>
+
+<div class="page" id="page-my-expiry">
+  <div class="page-header">
+    <h2><i class="ti ti-calendar-exclamation" style="color:#a32d2d"></i> Expiry Alert</h2>
+    <div style="font-size:12px;color:var(--muted)">Item ជិត Expiry ដែលទាក់ទងនឹង <span id="me-dept-label"></span></div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <select id="me-range" onchange="loadMyExpiryAlert()" style="width:180px">
+      <option value="30">ក្នុងរយៈពេល 30 ថ្ងៃ</option>
+      <option value="60" selected>ក្នុងរយៈពេល 60 ថ្ងៃ</option>
+      <option value="90">ក្នុងរយៈពេល 90 ថ្ងៃ</option>
+    </select>
+    <select id="me-cat" onchange="loadMyExpiryAlert()" style="width:150px">
+      <option value="">ទាំងអស់ Category</option>
+      <option>Hematology</option><option>Chemistry</option><option>Microbiology</option>
+      <option>Sero/Immu</option><option>GeneXpert</option><option>Blood Bank</option><option>Consumables</option>
+    </select>
+    <button class="btn btn-sm" onclick="printMyExpiry()" style="margin-left:auto"><i class="ti ti-printer"></i> Print</button>
+  </div>
+
+  <div class="stats-grid" id="me-stats"></div>
+
+  <div class="tbl-wrap" style="margin-top:14px">
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Lot No</th>
+      <th>Expiry Date</th><th style="text-align:right">ថ្ងៃនៅសល់</th>
+      <th style="text-align:right">Balance</th><th>Unit</th>
+    </tr></thead>
+    <tbody id="me-body"></tbody></table>
   </div>
 </div>
 
@@ -965,7 +1137,7 @@ function printMyRequests(){
         <h3 style="margin:0;font-size:15px"><i class="ti ti-building-warehouse" style="color:var(--blue)"></i> Storage Areas</h3>
         <button class="btn btn-sm btn-primary" onclick="openAddListItem('storage_area')"><i class="ti ti-plus"></i> Add</button>
       </div>
-      <div id="list-storage-area"></div>
+      <div id="list-storage_area"></div>
     </div>
     <!-- Storage Conditions -->
     <div class="card">
@@ -973,7 +1145,7 @@ function printMyRequests(){
         <h3 style="margin:0;font-size:15px"><i class="ti ti-temperature" style="color:var(--orange)"></i> Storage Conditions</h3>
         <button class="btn btn-sm btn-primary" onclick="openAddListItem('storage_condition')"><i class="ti ti-plus"></i> Add</button>
       </div>
-      <div id="list-storage-condition"></div>
+      <div id="list-storage_condition"></div>
     </div>
     <!-- Suppliers -->
     <div class="card">
@@ -998,6 +1170,48 @@ function printMyRequests(){
         <button class="btn btn-sm btn-primary" onclick="openAddListItem('brand')"><i class="ti ti-plus"></i> Add</button>
       </div>
       <div id="list-brand" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px"></div>
+    </div>
+    <!-- Categories -->
+    <div class="card" style="grid-column:1/-1">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-category" style="color:#0891b2"></i> Categories</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('category')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-category" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px"></div>
+    </div>
+    <!-- Supply Type -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-truck-delivery" style="color:#059669"></i> Supply Type</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('supply_type')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-supply_type"></div>
+    </div>
+    <!-- Status -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-circle-check" style="color:#dc2626"></i> Status</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('item_status')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-item_status"></div>
+    </div>
+    <!-- Shelf -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px"><i class="ti ti-layout-rows" style="color:#7c3aed"></i> Shelf</h3>
+        <button class="btn btn-sm btn-primary" onclick="openAddListItem('shelf')"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="list-shelf"></div>
+    </div>
+    <!-- Column Headers -->
+    <div class="card" style="grid-column:1/-1">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <h3 style="margin:0;font-size:15px"><i class="ti ti-columns" style="color:#185fa5"></i> Column Headers</h3>
+          <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">កែឈ្មោះ column ក្នុង Master Inventory</p>
+        </div>
+        <button class="btn btn-primary" onclick="openColHeaderEditor()"><i class="ti ti-edit"></i> Edit Column Names</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1030,13 +1244,42 @@ function printMyRequests(){
   </div>
 </div>
 
-</div><!-- /main-content -->
 <!-- PO Request Page (inside main content, before closing app div) -->
 <div class="page" id="page-po-request">
   <div class="page-header">
     <h2><i class="ti ti-file-invoice" style="color:var(--blue)"></i> PO Request</h2>
-    <button class="btn btn-primary" onclick="openNewPOModal()"><i class="ti ti-plus"></i> New PO Request</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="printPOTurnaround()"><i class="ti ti-printer"></i> Print Turnaround</button>
+      <button class="btn btn-primary" onclick="openNewPOModal()"><i class="ti ti-plus"></i> New PO Request</button>
+    </div>
   </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">
+    <i class="ti ti-clock-hour-4" style="color:#185fa5"></i> PO Turnaround
+  </div>
+  <div class="stats-grid" id="po-turn-stats"></div>
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:14px 0 8px">
+    <i class="ti ti-alert-triangle" style="color:#a32d2d"></i> PO កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ
+  </div>
+  <div class="tbl-wrap" style="margin-bottom:18px">
+    <table><thead><tr>
+      <th>PO No</th><th>Date</th><th>Requested By</th><th>Supplier</th>
+      <th style="text-align:right">រង់ចាំ (ថ្ងៃ)</th><th>Status</th>
+    </tr></thead>
+    <tbody id="po-turn-overdue-body"></tbody></table>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:14px 0 8px">
+    <i class="ti ti-package" style="color:#0f6e56"></i> Pending by Item — Item ណាដែលកំពុងរង់ចាំច្រើនបំផុត
+  </div>
+  <div class="tbl-wrap" style="margin-bottom:18px">
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Supplier</th>
+      <th style="text-align:right"># PO</th><th style="text-align:right">Total Qty Pending</th>
+    </tr></thead>
+    <tbody id="po-turn-pending-item-body"></tbody></table>
+  </div>
+
   <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
     <select id="po-filter-status" onchange="loadPOList()" style="width:150px;padding:7px 10px;font-size:12px">
       <option value="">ទាំងអស់ Status</option>
@@ -1054,6 +1297,8 @@ function printMyRequests(){
     </table>
   </div>
 </div>
+
+</div><!-- /main-content -->
 
 </div><!-- /app -->
 
@@ -1088,7 +1333,21 @@ const db=createClient(SB_URL,SB_KEY);
   }
 })();
 
-const CATS=['Chemistry','Hematology','Microbiology','Sero/Immu','Molecular','Consumables','Blood Bank','Other'];
+var CATS=['Chemistry','Hematology','Microbiology','Sero/Immu','Molecular','Consumables','Blood Bank','Other'];
+var DYN_CATS=[...CATS];
+
+// Master Inventory Column Headers (editable)
+var COL_HEADERS={
+  item_code:'Item Code', item_name:'Item Name', category:'Category',
+  ref:'Ref.', lot_no:'Lot No', date_in:'Date In', expiry_date:'Expiry Date', days:'Days',
+  brand:'Brand', supplier:'Supplier', source:'Source', unit:'Unit', size:'Size',
+  unit_price:'Unit Price', opening:'Opening', stock_in:'Stock In', stock_out:'Stock Out',
+  adj:'Adj.', balance:'Balance (Stock in Hand)', amc:'AMC', supply_type:'Supply Type',
+  mos:'MOS', min:'Min', status:'Status', required_order:'Required Order',
+  expiry_alert:'Expiry Alert', stock_value:'Stock Value',
+  storage_condition:'Storage Condition', storage_area:'Storage Area', shelf:'Shelf', remarks:'Remarks'
+};
+var COL_KEYS=Object.keys(COL_HEADERS);
 const DEPTS=['Hematology','Chemistry','Microbiology','Sero/Immu','Molecular','Blood Bank','Specimen Receiving','Collection'];
 const WARDS=['ED','MICU','SICU','OBGY','PEDs','SUR','DMID','ENT','ANES','OPD'];
 const SOURCES=['TSNH','CMS','លទ្ធកម្ម','Free'];
@@ -1096,6 +1355,9 @@ const STORAGE=['Room temp (20–30°C)','2–8°C (Refrigerator)','-20°C (Freez
 const AREAS=['Store room Stock','Room Stock Micro','Room Storage Specimen (flammable)','H7','Refri #1 Stock','Refri #2 Stock','Refri #3 Stock','Refri #4 Stock','Refri #5 Stock','Freezer -20°C General','Freezer -20°C Micro','Other'];
 let DYN_SUPPLIERS=[];
 var DYN_BRANDS=[];
+var DYN_SUPPLY_TYPES=[];
+var DYN_STATUSES=[];
+var DYN_SHELVES=[];
 let DYN_STORAGE=[...STORAGE];
 let DYN_AREAS=[...AREAS];
 
@@ -1151,8 +1413,73 @@ const today=new Date();
 function fd(d){if(!d)return '-';let dt=new Date(d);return isNaN(dt)?d:dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})}
 function daysDiff(exp){if(!exp)return 9999;return Math.floor((new Date(exp)-today)/86400000)}
 function srcBadge(s){let m={TSNH:'tsnh',CMS:'cms',Free:'free'};let c=m[s]||(String(s).includes('លទ្ធ')?'ldth':'tsnh');return`<span class="badge badge-${c}">${s||''}</span>`}
-function statusBadge(b,m){let s=b<=m?'REORDER':'OK';return`<span class="badge badge-${s.toLowerCase()}">${s}</span>`}
+function calcItemMOS(i){
+  var amc=parseFloat(i.amc)||0;
+  var bal=parseFloat(i.balance)||0;
+  if(amc<=0)return null;
+  return bal/amc;
+}
+function calcItemStatus(i){
+  var mos=calcItemMOS(i);
+  if(mos===null)return null;
+  var sup=i.supply_type||'';
+  // Use labels from List Management (DYN_STATUSES) if available
+  var lb_oos=DYN_STATUSES.find(s=>s.toLowerCase().includes('out of stock'))||'Out of stock';
+  var lb_toward=DYN_STATUSES.find(s=>s.toLowerCase().includes('toward'))||'Toward out of stock';
+  var lb_suf=DYN_STATUSES.find(s=>s.toLowerCase().includes('sufficient'))||'Sufficient stock';
+  var lb_exc=DYN_STATUSES.find(s=>s.toLowerCase().includes('excess'))||'Stock excessive';
+  if(sup.includes('3')){
+    if(mos===0)return{label:lb_oos,color:'#dc2626',bg:'#fee2e2'};
+    if(mos<3)return{label:lb_toward,color:'#d97706',bg:'#fef3c7'};
+    if(mos<=6)return{label:lb_suf,color:'#16a34a',bg:'#dcfce7'};
+    return{label:lb_exc,color:'#7c3aed',bg:'#ede9fe'};
+  } else {
+    if(mos===0)return{label:lb_oos,color:'#dc2626',bg:'#fee2e2'};
+    if(mos<0.5)return{label:lb_toward,color:'#d97706',bg:'#fef3c7'};
+    if(mos<=3)return{label:lb_suf,color:'#16a34a',bg:'#dcfce7'};
+    return{label:lb_exc,color:'#7c3aed',bg:'#ede9fe'};
+  }
+}
+function statusBadge(b,m,i){
+  // Use ISO 15189 if AMC available
+  if(i&&i.amc){
+    var st=calcItemStatus(i);
+    if(st)return`<span style="padding:3px 8px;border-radius:8px;font-size:11px;font-weight:600;background:${st.bg};color:${st.color};white-space:nowrap;display:inline-block">${st.label}</span>`;
+  }
+  var s=b<=m?'REORDER':'OK';
+  return`<span class="badge badge-${s.toLowerCase()}">${s}</span>`;
+}
 function reqBadge(s){let cls=s==='Delete Requested'?'delete-requested':s.toLowerCase().replace(/ /g,'-');let label=s==='Delete Requested'?'🗑️ Delete Requested':s;return`<span class="badge badge-${cls}">${label}</span>`}
+
+// ===== Shared "Pending by Item" paginated renderer (show 10, See more/less) =====
+function renderPendingByItemRows(rows,itemMapAll,tbodyId,expandKey){
+  let body=document.getElementById(tbodyId);
+  if(!body)return;
+  if(!rows.length){body.innerHTML='<tr><td colspan="6"><div class="empty">គ្មានទិន្នន័យ item</div></td></tr>';return;}
+  window._pibExpanded=window._pibExpanded||{};
+  let expanded=!!window._pibExpanded[expandKey];
+  let showRows=expanded?rows:rows.slice(0,10);
+  let html=showRows.map(([code,v])=>`<tr>
+      <td><code>${code}</code></td>
+      <td style="font-weight:500">${v.name}</td>
+      <td style="font-size:12px;color:var(--muted)">${itemMapAll[code]?.category||'-'}</td>
+      <td style="font-size:12px">${v.extra||'-'}</td>
+      <td style="text-align:right">${v.count}</td>
+      <td style="text-align:right;font-weight:700;color:#854f0b">${v.qty}</td>
+    </tr>`).join('');
+  if(rows.length>10){
+    html+=expanded
+      ?`<tr><td colspan="6" style="text-align:center;padding:10px"><button class="btn btn-sm" onclick="togglePendingByItem('${expandKey}')">Show less ▲</button></td></tr>`
+      :`<tr><td colspan="6" style="text-align:center;padding:10px"><button class="btn btn-sm" onclick="togglePendingByItem('${expandKey}')">See more (+${rows.length-10}) ▼</button></td></tr>`;
+  }
+  body.innerHTML=html;
+}
+function togglePendingByItem(key){
+  window._pibExpanded=window._pibExpanded||{};
+  window._pibExpanded[key]=!window._pibExpanded[key];
+  if(key==='req')renderPendingByItemRows(window._reqPendingByItem||[],window._reqItemMapAll||{},'req-turn-pending-item-body','req');
+  if(key==='po')renderPendingByItemRows(window._poPendingByItem||[],window._poItemMapAll||{},'po-turn-pending-item-body','po');
+}
 
 // ===== LOGIN =====
 async function doLogin(){
@@ -1254,13 +1581,17 @@ function setupNav(){
       <div class="nav-section">Admin</div>
       <div class="nav-item" data-page="users"><i class="ti ti-users"></i> User Management</div>
       <div class="nav-item" data-page="visibility"><i class="ti ti-eye"></i> Item Visibility</div>
-      <div class="nav-item" data-page="list-mgmt"><i class="ti ti-list-check"></i> List Management</div>`;
+      <div class="nav-item" data-page="list-mgmt"><i class="ti ti-list-check"></i> List Management</div>
+`;
   } else {
     nav.innerHTML=`
       <div class="nav-item" data-page="my-dashboard"><i class="ti ti-layout-dashboard"></i> Dashboard</div>
       <div class="nav-item" data-page="my-requests"><i class="ti ti-clipboard-list"></i> My Requests</div>
       <div class="nav-item" data-page="my-stockin"><i class="ti ti-arrow-bar-to-down" style="color:#0f6e56"></i> Stock In</div>
-      <div class="nav-item" data-page="my-stockout"><i class="ti ti-arrow-bar-up" style="color:#a32d2d"></i> Stock Out</div>`;
+      <div class="nav-item" data-page="my-stockout"><i class="ti ti-arrow-bar-up" style="color:#a32d2d"></i> Stock Out</div>
+      <div class="nav-item" data-page="my-usage"><i class="ti ti-chart-histogram" style="color:#0f6e56"></i> My Usage Summary</div>
+      <div class="nav-item" data-page="my-turnaround"><i class="ti ti-clock-hour-4" style="color:#185fa5"></i> Request Turnaround</div>
+      <div class="nav-item" data-page="my-expiry"><i class="ti ti-calendar-exclamation" style="color:#a32d2d"></i> Expiry Alert</div>`;
   }
   document.querySelectorAll('.nav-item[data-page]').forEach(el=>{
     el.addEventListener('click',()=>goPage(el.dataset.page));
@@ -1275,16 +1606,19 @@ function goPage(p){
   let page=document.getElementById('page-'+p);
   if(page)page.classList.add('active');
   if(p==='dashboard')loadDashboard();
-  else if(p==='inventory')loadInventory();
+  else if(p==='inventory'){initMonthlyBar().then(()=>loadInventory(true));}
   else if(p==='stockin'){renderBatch();loadSIHist();
     rebuildScanSupDropdown();
   }
   else if(p==='stockout')loadSOHist();
   else if(p==='requests-admin')loadAdminRequests();
-  else if(p==='my-dashboard')loadMyDashboard();
+  else if(p==='my-dashboard'){initMyMonthlyBar().then(()=>loadMyDashboard());}
   else if(p==='my-requests')loadMyRequests();
   else if(p==='my-stockin')loadMyStockIn();
   else if(p==='my-stockout')loadMyStockOut();
+  else if(p==='my-usage')loadMyUsageSummary();
+  else if(p==='my-turnaround')loadMyTurnaround();
+  else if(p==='my-expiry')loadMyExpiryAlert();
   else if(p==='alerts')loadAlerts();
   else if(p==='report')loadReport();
   else if(p==='users')loadUsers();
@@ -1293,13 +1627,16 @@ function goPage(p){
   else if(p==='po-request')loadPOList();
 }
 async function updateBadges(){
-  let {count}=await db.from('requests').select('*',{count:'exact',head:true}).eq('status','Pending').neq('type','PO');
+  // NOTE: normal requests never set a 'type' column (stays NULL in DB).
+  // .neq('type','PO') in SQL evaluates to NULL (not TRUE) for NULL rows, so it SILENTLY
+  // excludes normal Pending requests from the count. Fetch all Pending and filter client-side instead.
+  let {data:allPending}=await db.from('requests').select('req_no,type,status').eq('status','Pending');
+  let poList=(allPending||[]).filter(r=>r.type==='PO'||r.req_no?.startsWith('PO-'));
+  let normalList=(allPending||[]).filter(r=>!(r.type==='PO'||r.req_no?.startsWith('PO-')));
   let el=document.getElementById('req-badge');
-  if(el)el.textContent=count||0;
-  let {data:poData}=await db.from('requests').select('req_no,type,status').eq('status','Pending');
-  let poCnt=((poData||[]).filter(r=>r.type==='PO'||r.req_no?.startsWith('PO-'))).length;
+  if(el)el.textContent=normalList.length||0;
   let pob=document.getElementById('po-badge');
-  if(pob)pob.textContent=poCnt||0;
+  if(pob)pob.textContent=poList.length||0;
   let {data:items}=await db.from('items').select('balance,min_stock,expiry');
   if(items){
     let n=(items.filter(i=>i.balance<=i.min_stock).length)+(items.filter(i=>daysDiff(i.expiry)<=90&&daysDiff(i.expiry)>=0).length);
@@ -1443,7 +1780,146 @@ async function loadDashboard(){
 }
 
 // ===== INVENTORY =====
-async function loadInventory(){
+
+// ===== MONTHLY MODE =====
+var _monthlyMode=false,_selectedMonth=0,_selectedYear=new Date().getFullYear(),_lockedMonths={};
+function monthName(m){return['','January','February','March','April','May','June','July','August','September','October','November','December'][m];}
+async function initMonthlyBar(){
+  var sel=document.getElementById('inv-monthly-sel');if(!sel)return;
+  var cy=new Date().getFullYear(),cm=new Date().getMonth()+1;
+  var ld=await db.from('monthly_stock').select('month,year,locked').eq('locked',true);
+  _lockedMonths={};((ld.data)||[]).forEach(function(r){_lockedMonths[r.year+'_'+r.month]=true;});
+  var opts=['<option value="">Normal Mode</option>'];
+  var startYear=2026;
+  for(var y=startYear;y<=cy+1;y++){for(var m=1;m<=12;m++){if(y===cy&&m>cm+1)continue;if(y>cy)continue;opts.push('<option value="'+y+'_'+m+'">'+((_lockedMonths[y+'_'+m])?'Lock ':'')+monthName(m)+' '+y+'</option>');}
+  }
+  sel.innerHTML=opts.join('');
+  var sv='';try{sv=localStorage.getItem('inv_monthly_sel')||'';}catch(e){}
+  if(sv&&sel.querySelector('option[value="'+sv+'"]'))sel.value=sv;
+  else{sel.value=cy+'_'+cm;try{localStorage.setItem('inv_monthly_sel',cy+'_'+cm);}catch(e){}}
+  onMonthlySelChange(false);
+}
+function onMonthlySelChange(doLoad){
+  var sel=document.getElementById('inv-monthly-sel'),val=sel?sel.value:'';
+  var cb=document.getElementById('btn-close-month'),lb=document.getElementById('monthly-lock-badge');
+  if(!val){_monthlyMode=false;_selectedMonth=0;if(cb)cb.style.display='none';if(lb)lb.style.display='none';}
+  else{
+    var p=val.split('_');_selectedYear=parseInt(p[0]);_selectedMonth=parseInt(p[1]);_monthlyMode=true;
+    var ms=document.getElementById('inv-monthly-month'),ys=document.getElementById('inv-monthly-year');
+    if(ms)ms.value=_selectedMonth;if(ys)ys.value=_selectedYear;
+    var lk=_lockedMonths[_selectedYear+'_'+_selectedMonth];
+    if(cb){cb.style.display='inline-block';cb.innerHTML=lk?'<i class="ti ti-lock-open"></i> Unlock Month':'<i class="ti ti-lock"></i> Close Month';cb.style.background=lk?'#d97706':'#185fa5';cb.style.borderColor=lk?'#d97706':'#185fa5';}
+    if(lb)lb.style.display=lk?'inline-block':'none';
+  }
+  try{localStorage.setItem('inv_monthly_sel',val);}catch(e){}
+  if(doLoad!==false)loadInventory();
+}
+function saveMonthlyState(){try{localStorage.setItem('inv_monthly_sel',document.getElementById('inv-monthly-sel').value||'');}catch(e){}}
+async function restoreMonthlyState(){await initMonthlyBar();}
+
+// ===== STAFF: My Dashboard monthly bar (read-only view, same formula as Master Inventory) =====
+var _myMonthlyMode=false,_mySelectedMonth=0,_mySelectedYear=new Date().getFullYear();
+async function initMyMonthlyBar(){
+  var sel=document.getElementById('my-dash-monthly-sel');if(!sel)return;
+  var cy=new Date().getFullYear(),cm=new Date().getMonth()+1;
+  var ld=await db.from('monthly_stock').select('month,year,locked').eq('locked',true);
+  var lockedMap={};((ld.data)||[]).forEach(function(r){lockedMap[r.year+'_'+r.month]=true;});
+  window._myLockedMonths=lockedMap;
+  var opts=['<option value="">Normal Mode</option>'];
+  var startYear=2026;
+  for(var y=startYear;y<=cy+1;y++){for(var m=1;m<=12;m++){if(y===cy&&m>cm+1)continue;if(y>cy)continue;opts.push('<option value="'+y+'_'+m+'">'+((lockedMap[y+'_'+m])?'Lock ':'')+monthName(m)+' '+y+'</option>');}}
+  sel.innerHTML=opts.join('');
+  var sv='';try{sv=localStorage.getItem('my_dash_monthly_sel')||'';}catch(e){}
+  if(sv&&sel.querySelector('option[value="'+sv+'"]'))sel.value=sv;
+  else{sel.value=cy+'_'+cm;try{localStorage.setItem('my_dash_monthly_sel',cy+'_'+cm);}catch(e){}}
+  onMyMonthlySelChange(false);
+}
+function onMyMonthlySelChange(doLoad){
+  var sel=document.getElementById('my-dash-monthly-sel'),val=sel?sel.value:'';
+  var lb=document.getElementById('my-dash-lock-badge');
+  if(!val){_myMonthlyMode=false;_mySelectedMonth=0;if(lb)lb.style.display='none';}
+  else{
+    var p=val.split('_');_mySelectedYear=parseInt(p[0]);_mySelectedMonth=parseInt(p[1]);_myMonthlyMode=true;
+    var lk=(window._myLockedMonths||{})[_mySelectedYear+'_'+_mySelectedMonth];
+    if(lb)lb.style.display=lk?'inline-block':'none';
+  }
+  try{localStorage.setItem('my_dash_monthly_sel',val);}catch(e){}
+  if(doLoad!==false)loadMyDashboard();
+}
+function toggleMonthlyMode(){}
+function applyMonthlyUI(){}
+function renderMonthlyTabs(){return Promise.resolve();}
+function renderMonthlyTabsInit(){initMonthlyBar();}
+function selectMonthTab(){}
+async function openCloseMonthDialog(){
+  var month=_selectedMonth||new Date().getMonth()+1,year=_selectedYear||new Date().getFullYear();
+  var isLocked=_lockedMonths[year+'_'+month],nextM=month===12?1:month+1,nextY=month===12?year+1:year;
+  if(isLocked){
+    var info=await db.from('monthly_stock').select('closed_at,closed_by').eq('year',year).eq('month',month).eq('locked',true).limit(1);
+    var cb=info.data&&info.data[0]?info.data[0].closed_by:'?';
+    var ca=info.data&&info.data[0]&&info.data[0].closed_at?new Date(info.data[0].closed_at).toLocaleString():'?';
+    openModal('<h3>Unlock '+monthName(month)+' '+year+'</h3><p>Locked by: '+cb+'</p><p>At: '+ca+'</p><div style="background:#fff3cd;border:1px solid #ffe08a;border-radius:8px;padding:10px 12px;margin:10px 0;font-size:13px;color:#856404"><i class="ti ti-alert-triangle" style="margin-right:4px"></i><strong>ប្រយ័ត្ន៖</strong> បើអ្នកកែ Stock In/Out ខែ'+monthName(month)+' បន្ទាប់ពី Unlock — Closing របស់ខែនេះនឹងផ្លាស់ប្តូរ ប៉ុន្តែ <strong>Opening របស់ខែ'+monthName(nextM)+' '+nextY+'</strong> (ដែលបានចាក់ស្រាប់ពេល Close Month) <strong>នឹងមិន auto-update តាមទេ</strong>។ ត្រូវកែ Opening ខែ'+monthName(nextM)+' ដោយដៃវិញឱ្យត្រូវនឹង Closing ថ្មី។</div><div class="form-group"><label>Reason *</label><input id="unlock-reason" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px"></div><div class="modal-footer"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn" style="background:#d97706;color:#fff" onclick="executeUnlockMonth('+month+','+year+')">Unlock</button></div>');
+    setTimeout(function(){var el=document.getElementById('unlock-reason');if(el)el.focus();},100);
+  }else{
+    openModal('<h3>Close '+monthName(month)+' '+year+'</h3><p>Balance '+monthName(month)+' will become Opening '+monthName(nextM)+' '+nextY+'</p><p>Month will be LOCKED after close.</p><div class="modal-footer"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" style="background:#185fa5" onclick="executeCloseMonth('+month+','+year+','+nextM+','+nextY+')">Close Month</button></div>');
+  }
+}
+async function executeUnlockMonth(month,year){
+  var reason=(document.getElementById('unlock-reason')||{}).value||'';
+  reason=reason.trim();
+  if(!reason){toast('Please provide reason!','error');return;}
+  var res=await db.from('monthly_stock').update({locked:false,closed_at:null,closed_by:'Unlocked: '+reason}).eq('year',year).eq('month',month);
+  if(res.error){toast('Error: '+res.error.message,'error');return;}
+  delete _lockedMonths[year+'_'+month];
+  toast('Unlocked '+monthName(month)+' '+year+'!','success');
+  closeModal();await initMonthlyBar();loadInventory();
+}
+async function executeCloseMonth(month,year,nextM,nextY){
+  var btn=document.querySelector('.modal-footer .btn-primary');
+  if(btn){btn.disabled=true;btn.innerHTML='Processing...';}
+  await db.from('monthly_stock').update({locked:true,closed_at:new Date().toISOString(),closed_by:CU?CU.username:''}).eq('year',year).eq('month',month);
+  _lockedMonths[year+'_'+month]=true;
+  var msRes=await db.from('monthly_stock').select('*').eq('year',year).eq('month',month).order('id',{ascending:true});
+  var msMap={};((msRes.data)||[]).forEach(function(r){
+    // If legacy duplicate rows exist for the same item, keep whichever has the most activity (safer than "last wins")
+    var prevR=msMap[r.item_code];
+    if(!prevR||((r.stock_in||0)+(r.stock_out||0)+Math.abs(r.adjustment||0))>=((prevR.stock_in||0)+(prevR.stock_out||0)+Math.abs(prevR.adjustment||0)))msMap[r.item_code]=r;
+  });
+  var itemsRes=await db.from('items').select('code,name,category,balance,amc,supply_type');
+  if(!itemsRes.data){toast('Error loading items!','error');if(btn)btn.disabled=false;return;}
+  var ins=itemsRes.data.map(function(i){
+    var ms=msMap[i.code];
+    var op=ms?((ms.opening||0)+(ms.stock_in||0)-(ms.stock_out||0)+(ms.adjustment||0)):(i.balance||0);
+    return{item_code:i.code,item_name:i.name,category:i.category||'',year:nextY,month:nextM,opening:op,stock_in:0,stock_out:0,adjustment:0,closing:op,amc:i.amc||0,mos:0,status:'',locked:false};
+  });
+  for(var c=0;c<ins.length;c+=100){await db.from('monthly_stock').upsert(ins.slice(c,c+100),{onConflict:'item_code,year,month'});}
+  toast('Closed '+monthName(month)+' '+year+' - Opened '+monthName(nextM)+' '+nextY+' ('+ins.length+' items)','success');
+  closeModal();await initMonthlyBar();
+  var sel=document.getElementById('inv-monthly-sel');
+  if(sel){sel.value=nextY+'_'+nextM;try{localStorage.setItem('inv_monthly_sel',nextY+'_'+nextM);}catch(e){}}
+  _selectedMonth=nextM;_selectedYear=nextY;_monthlyMode=true;onMonthlySelChange(false);loadInventory();
+}
+
+function renderInvHeader(){
+  var h=document.getElementById('inv-head');
+  if(!h)return;
+  h.innerHTML=`<tr>
+    <th style="text-align:center;width:40px">#</th><th>${COL_HEADERS.item_code}</th><th>${COL_HEADERS.item_name}</th><th>${COL_HEADERS.category}</th><th>${COL_HEADERS.ref}</th><th>${COL_HEADERS.lot_no}</th>
+    <th>${COL_HEADERS.date_in}</th><th>${COL_HEADERS.expiry_date}</th><th>${COL_HEADERS.days}</th>
+    <th>${COL_HEADERS.brand}</th><th>${COL_HEADERS.supplier}</th><th>${COL_HEADERS.source}</th><th>${COL_HEADERS.unit}</th><th>${COL_HEADERS.size}</th><th>${COL_HEADERS.unit_price}</th>
+    <th style="text-align:right">${COL_HEADERS.opening}</th><th style="text-align:right">${COL_HEADERS.stock_in}</th>
+    <th style="text-align:right">${COL_HEADERS.stock_out}</th><th style="text-align:right">${COL_HEADERS.adj}</th>
+    <th style="text-align:right">${COL_HEADERS.balance}</th><th style="text-align:right">${COL_HEADERS.amc}</th>
+    <th style="text-align:center">${COL_HEADERS.supply_type}</th><th style="text-align:right">${COL_HEADERS.mos}</th>
+    <th>${COL_HEADERS.status}</th>
+    <th style="text-align:right">${COL_HEADERS.required_order}</th>
+    <th>${COL_HEADERS.expiry_alert}</th><th style="text-align:right">${COL_HEADERS.stock_value}</th>
+    <th>${COL_HEADERS.storage_condition}</th><th>${COL_HEADERS.storage_area}</th><th>${COL_HEADERS.shelf}</th><th>${COL_HEADERS.remarks}</th><th></th>
+  </tr>`;
+}
+
+async function loadInventory(forceRefresh){
+  renderInvHeader();
   let search=document.getElementById('inv-search').value.trim();
   let cat=document.getElementById('inv-cat').value;
   let src=document.getElementById('inv-src').value;
@@ -1452,7 +1928,7 @@ async function loadInventory(){
   if(cat)q=q.eq('category',cat);
   if(src)q=q.eq('source',src);
   let {data:items}=await q;
-  if(!items){document.getElementById('inv-body').innerHTML='<tr><td colspan="28"><div class="empty">Error</div></td></tr>';return}
+  if(!items){document.getElementById('inv-body').innerHTML='<tr><td colspan="33"><div class="empty">Error</div></td></tr>';return}
   if(search)items=items.filter(i=>`${i.code}${i.name}${i.category}${i.ref||''}`.toLowerCase().includes(search.toLowerCase()));
   if(status)items=items.filter(i=>(i.balance<=i.min_stock?'REORDER':'OK')===status);
   allItems=items;
@@ -1465,14 +1941,38 @@ async function loadInventory(){
   if(counterEl)counterEl.innerHTML=`📦 <strong style="color:var(--blue);font-size:15px">${items.length}</strong> <span style="font-size:12px;color:var(--muted)">items [${_label}]</span>${items.length>50?` <span style="font-size:11px;color:var(--amber)">— បង្ហាញ 50 ដំបូង</span>`:''}`;
   // Show only 50 items
   let displayItems=items.slice(0,50);
-  document.getElementById('inv-body').innerHTML=displayItems.length?displayItems.map(i=>{
+  // Load monthly data if monthly mode ON
+  var monthlyMap={};
+  if(_monthlyMode){
+    var mMonth=_selectedMonth||parseInt(document.getElementById('inv-monthly-month')?.value)||new Date().getMonth()+1;
+    var mYear=_selectedYear||parseInt(document.getElementById('inv-monthly-year')?.value)||new Date().getFullYear();
+    monthlyMap=await getMonthlyData(mMonth,mYear); // Always fresh from DB
+    // Auto-create missing rows for displayed items
+    var missing=displayItems.filter(i=>!monthlyMap[i.code]);
+    for(var mi of missing){
+      var nr=await ensureMonthlyRow(mi.code,mi.name,mi.category||'',mMonth,mYear);
+      if(nr)monthlyMap[mi.code]=nr;
+    }
+  }
+  document.getElementById('inv-body').innerHTML=displayItems.length?displayItems.map((i,idx)=>{
     let d=daysDiff(i.expiry);
     let dc=d<0?'var(--red)':d<=30?'var(--amber)':d<=90?'#856404':'var(--green)';
     let expAlert=d<0?'<span class="badge badge-expired">Expired</span>':d<=30?'<span class="badge badge-expiring">≤30d</span>':d<=90?'<span class="badge" style="background:#fff3cd;color:#856404">≤90d</span>':'';
     let expBadge=d<0?' <span class="badge badge-expired" style="font-size:10px">!</span>':d<=30?' <span class="badge badge-expiring" style="font-size:10px">≤30d</span>':'';
     let sv=((i.balance||0)*(i.unit_price||0)).toFixed(2);
+    // Monthly data
+    let mr=monthlyMap[i.code]||{};
+    let mOpening=_monthlyMode?(mr.opening||0):(i.opening_stock||0);
+    let mStockIn=_monthlyMode?(mr.stock_in||0):(i.stock_in||0);
+    let mStockOut=_monthlyMode?(mr.stock_out||0):(i.stock_out||0);
+    let mAdj=_monthlyMode?(mr.adjustment||0):(i.adjustment||0);
+    // Balance = Opening + Stock In - Stock Out ± Adj (Excel formula)
+    let mBalance=_monthlyMode
+      ?((mr.opening||0)+(mr.stock_in||0)-(mr.stock_out||0)+(mr.adjustment||0))
+      :(i.balance||0);
+    let mId=mr.id||'';
     return`<tr>
-      <td><code>${i.code}</code></td><td style="font-weight:500;min-width:130px">${i.name}</td>
+      <td style="text-align:center;font-size:12px;color:var(--muted);font-weight:500">${idx+1}</td><td><code>${i.code}</code></td><td style="font-weight:500;min-width:130px">${i.name}</td>
       <td style="font-size:12px;color:var(--muted)">${i.category||''}</td>
       <td style="font-size:12px">${i.ref||'-'}</td><td style="font-size:12px">${i.lot||'-'}</td>
       <td style="font-size:12px;white-space:nowrap">${fd(i.date_in)}</td>
@@ -1481,27 +1981,38 @@ async function loadInventory(){
       <td style="font-size:12px">${i.brand||'-'}</td><td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
       <td style="font-size:12px">${i.unit||''}</td><td style="font-size:12px">${i.size||'-'}</td>
       <td style="font-size:12px;text-align:right">${i.unit_price||0}</td>
-      <td style="text-align:right;font-size:12px">${i.opening_stock||0}</td>
-      <td style="text-align:right;font-size:12px;color:var(--green);font-weight:500">${i.stock_in||0}</td>
-      <td style="text-align:right;font-size:12px;color:var(--red);font-weight:500">${i.stock_out||0}</td>
-      <td style="text-align:right;font-size:12px;color:var(--amber)">${i.adjustment||0}</td>
-      <td style="text-align:right;font-weight:700;color:${i.balance<=i.min_stock?'var(--red)':'var(--green)'}">${i.balance}</td>
-      <td style="text-align:right;font-size:12px">${i.min_stock}</td>
+      <td style="text-align:right;font-size:12px${_monthlyMode?';color:var(--blue);font-weight:600':''}">${mOpening}</td>
+      <td style="text-align:right;font-size:12px;color:var(--green);font-weight:500">${mStockIn}</td>
+      <td style="text-align:right;font-size:12px;color:var(--red);font-weight:500">${mStockOut}</td>
+      <td style="text-align:right;font-size:12px;color:var(--amber)">${mAdj}</td>
+      <td style="text-align:right;font-weight:700;color:${mBalance<=i.min_stock?'var(--red)':'var(--green)'}">${mBalance}</td>
+      <td style="text-align:right;font-size:12px">${i.amc||'-'}</td>
+      <td style="text-align:center;font-size:12px">${i.supply_type||'-'}</td>
+      <td style="text-align:right;font-size:12px">${(()=>{var amc=parseFloat(i.amc)||0;if(!amc)return i.mos||'-';return(parseFloat(i.balance)/amc).toFixed(1);})()}</td>
+      <td>${statusBadge(i.balance,i.min_stock,i)}</td>
+      <td style="text-align:right;font-size:12px;color:var(--amber);font-weight:600">${(()=>{
+        var amc=parseFloat(i.amc)||0;var bal=parseFloat(i.balance)||0;
+        if(!amc)return i.required_order||'-';
+        var months=(i.supply_type||'').includes('3')?6:3;
+        var req=Math.max(0,Math.ceil(amc*months-bal));
+        return req;
+      })()}</td>
+      <td>${expAlert}</td>
       <td style="text-align:right;font-size:12px;color:var(--blue)">${sv}</td>
-      <td>${statusBadge(i.balance,i.min_stock)}</td><td>${expAlert}</td>
       <td style="font-size:11px;color:var(--muted);min-width:110px">${i.storage_condition||'-'}</td>
       <td style="font-size:11px;color:var(--muted);min-width:100px">${i.storage_area||'-'}</td>
-      <td style="font-size:12px">${i.iso_clause||'-'}</td>
+      <td style="font-size:12px">${i.shelf||'-'}</td>
       <td style="font-size:12px;color:var(--muted)">${i.remarks||'-'}</td>
       <td style="white-space:nowrap">
+        <button class="btn btn-sm" onclick="printStockCard('${i.code}')" style="margin-right:4px" title="Print Stock/Bin Card"><i class="ti ti-printer"></i></button>
         <button class="btn btn-sm" onclick="openEditItem('${i.code}')" style="margin-right:4px"><i class="ti ti-edit"></i></button>
         <button class="btn btn-sm btn-danger" onclick="deleteItem('${i.code}','${i.name.replace(/'/g,`\\'`)}')"><i class="ti ti-trash"></i></button>
       </td>
     </tr>`;
-  }).join('')+(items.length>50?`<tr><td colspan="28" style="text-align:center;padding:12px">
+  }).join('')+(items.length>50?`<tr><td colspan="33" style="text-align:center;padding:12px">
     <span style="font-size:12px;color:var(--muted)">បង្ហាញ 50/${items.length} items — </span>
     <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600" onclick="showAllItems()">មើលទាំងអស់ ${items.length} items →</span>
-  </td></tr>`:'')+`<tr style="display:none" id="inv-all-trigger"></tr>`:`<tr><td colspan="28"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>`;
+  </td></tr>`:'')+`<tr style="display:none" id="inv-all-trigger"></tr>`:`<tr><td colspan="33"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>`;
 }
 
 function showAllItems(){
@@ -1542,9 +2053,10 @@ function showAllItems(){
       <td>${i.balance<=i.min_stock?'<span class="badge badge-reorder">REORDER</span>':'<span class="badge badge-ok">OK</span>'}</td>
       <td style="font-size:11px;color:var(--muted)">${i.storage_condition||'-'}</td>
       <td style="font-size:11px;color:var(--muted)">${i.storage_area||'-'}</td>
-      <td style="font-size:12px;text-align:center">${i.iso_clause||'-'}</td>
+      <td style="font-size:12px">${i.amc||''}</td><td style="text-align:center;font-size:12px">${i.supply_type||''}</td><td style="text-align:right;font-size:12px">${i.mos||''}</td>
       <td style="font-size:11px;color:var(--muted)">${i.remarks||'-'}</td>
       <td style="white-space:nowrap">
+        <button class="btn btn-sm" onclick="printStockCard('${i.code}')" style="margin-right:4px" title="Print Stock/Bin Card"><i class="ti ti-printer"></i></button>
         <button class="btn btn-sm" onclick="openEditItem('${i.code}')" style="margin-right:4px"><i class="ti ti-edit"></i></button>
         <button class="btn btn-sm btn-danger" onclick="deleteItem('${i.code}','${i.name.replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
       </td>
@@ -1553,27 +2065,34 @@ function showAllItems(){
 }
 
 async function openAddItem(){
+  // Load all lists from DB first
+  await Promise.all(['storage_area','storage_condition','supplier','source','brand'].map(t=>getListItems(t)));
   refreshDynLists();
-  // Auto-generate item code based on category prefix
-  var autoCode=await generateItemCode('H');
   var oc=CATS.map(c=>`<option>${c}</option>`).join('');
-  // Build source options from DB list
   var srcOpts=(_listCache.source&&_listCache.source.length?_listCache.source.map(d=>d.value):SOURCES);
   openModal(`<h3><i class="ti ti-plus" style="color:var(--blue)"></i> Add New Item</h3>
   <div class="form-grid">
-    <div class="form-group" style="grid-column:1/-1">
+    <div class="form-group">
       <label>Category *</label>
-      <select id="ni-cat" onchange="updateItemCodePrefix()" style="font-weight:600">
+      <select id="ni-cat" onchange="updatePrefixList()" style="font-weight:600">
         ${CATS.map((c,i)=>`<option value="${c}">${c}</option>`).join('')}
       </select>
     </div>
     <div class="form-group">
+      <label>Prefix *
+        <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:4px">(ជ្រើសរើសអក្សរ)</span>
+      </label>
+      <select id="ni-prefix" onchange="updateItemCodeFromPrefix()" style="font-weight:700;color:var(--blue)">
+        <option value="">-- ជ្រើសរើស --</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label>Item Code *
-        <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:6px">(Auto)</span>
+        <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:4px">(Auto)</span>
       </label>
       <div style="display:flex;gap:6px;align-items:center">
-        <input id="ni-code" value="${autoCode}" style="font-weight:700;color:var(--blue);letter-spacing:.05em;flex:1" placeholder="e.g. XA0001">
-        <button class="btn btn-sm" onclick="refreshItemCode()" title="Generate new code" style="white-space:nowrap"><i class="ti ti-refresh"></i></button>
+        <input id="ni-code" style="font-weight:700;color:var(--blue);letter-spacing:.05em;flex:1" placeholder="ជ្រើស Prefix ជាមុន...">
+        <button class="btn btn-sm" onclick="refreshItemCode()" title="Generate new code"><i class="ti ti-refresh"></i></button>
       </div>
       <div id="ni-code-check" style="font-size:11px;margin-top:3px"></div>
     </div>
@@ -1597,21 +2116,54 @@ async function openAddItem(){
   </div>`);
   // Check code uniqueness on type
   document.getElementById('ni-code')?.addEventListener('input',debounceCheckCode);
+  // Auto-load prefix for default category
+  setTimeout(()=>updatePrefixList(),100);
 }
 
 // Category prefix map
-var CAT_PREFIX={'Chemistry':'XA','Hematology':'XB','Microbiology':'XC','Sero/Immu':'XD','Molecular':'XE','Consumables':'XF','Blood Bank':'XG','Other':'XH'};
+var CAT_PREFIX={'Chemistry':'BC','Hematology':'H','Microbiology':'M','Sero/Immu':'II','Molecular':'P','Consumables':'C','Blood Bank':'BL','Other':'OT'};
+var CAT_START={'Hematology':1,'Chemistry':1001,'Consumables':2001,'Microbiology':3001,'Molecular':4001,'Sero/Immu':5001,'Blood Bank':6001,'Other':7001};
 
 async function generateItemCode(prefix){
+  // Get category start number
+  var cat=document.getElementById('ni-cat')?.value||'';
+  var startNum=CAT_START[cat]||1;
   // Find highest existing code with this prefix
-  var {data}=await db.from('items').select('code').ilike('code',prefix+'%').order('code',{ascending:false}).limit(1);
+  var {data}=await db.from('items').select('code').ilike('code',prefix+'-%').order('code',{ascending:false});
   if(!data||!data.length){
-    // pad to 4 digits
-    return prefix+String(1).padStart(4,'0');
+    return prefix+'-'+String(startNum).padStart(4,'0');
   }
-  var last=data[0].code;
-  var num=parseInt(last.replace(/[^0-9]/g,''))||0;
-  return prefix+String(num+1).padStart(4,'0');
+  // Extract numbers and find max
+  var nums=data.map(d=>{
+    var m=d.code.match(/-(\d+)$/);
+    return m?parseInt(m[1]):0;
+  }).filter(n=>n>0);
+  var maxNum=nums.length?Math.max(...nums):startNum-1;
+  var nextNum=Math.max(maxNum+1, startNum);
+  return prefix+'-'+String(nextNum).padStart(4,'0');
+}
+
+async function updatePrefixList(){
+  var cat=document.getElementById('ni-cat')?.value||'';
+  var sel=document.getElementById('ni-prefix');
+  if(!sel)return;
+  // Get all prefixes used in this category from allItems
+  var prefixes=[...new Set(allItems.filter(i=>i.category===cat).map(i=>{
+    var m=i.code.match(/^([A-Z0-9]+)-/);
+    return m?m[1]:'';
+  }).filter(Boolean))].sort();
+  sel.innerHTML='<option value="">-- ជ្រើសរើស --</option>'+prefixes.map(p=>`<option value="${p}">${p}</option>`).join('');
+  // Reset code
+  var inp=document.getElementById('ni-code');
+  if(inp){inp.value='';document.getElementById('ni-code-check').innerHTML='';}
+}
+
+async function updateItemCodeFromPrefix(){
+  var prefix=document.getElementById('ni-prefix')?.value||'';
+  if(!prefix)return;
+  var code=await generateItemCode(prefix);
+  var inp=document.getElementById('ni-code');
+  if(inp){inp.value=code;checkCodeUnique(code);}
 }
 
 async function updateItemCodePrefix(){
@@ -1624,8 +2176,8 @@ async function updateItemCodePrefix(){
 }
 
 async function refreshItemCode(){
-  var cat=document.getElementById('ni-cat')?.value||'Other';
-  var prefix=CAT_PREFIX[cat]||'XH';
+  var prefix=document.getElementById('ni-prefix')?.value||'';
+  if(!prefix){toast('សូមជ្រើស Prefix ជាមុន!','error');return;}
   var code=await generateItemCode(prefix);
   var inp=document.getElementById('ni-code');
   if(inp){inp.value=code;checkCodeUnique(code);}
@@ -1685,6 +2237,109 @@ async function saveNewItem(){
   await loadInventory();
   toast('✅ Item ['+code+'] '+name+' បានបន្ថែមក្នុង Master Inventory!','success');
 }
+// ===== PRINT STOCK / BIN CARD (per item, official ISO 15189 template) =====
+async function printStockCard(code){
+  let {data:item}=await db.from('items').select('*').eq('code',code).single();
+  if(!item){toast('រកមិនឃើញ item!','error');return;}
+
+  let {data:inLogs}=await db.from('stock_in_log').select('*').eq('item_code',code).order('created_at',{ascending:true});
+  let {data:outLogs}=await db.from('stock_out_log').select('*').eq('item_code',code).order('created_at',{ascending:true});
+
+  // Opening baseline: earliest monthly_stock record for this item ("យោងតាម Balance ខែចាស់")
+  let {data:msRows}=await db.from('monthly_stock').select('*').eq('item_code',code).order('year',{ascending:true}).order('month',{ascending:true}).limit(1);
+  let openingRow=null;
+  if(msRows&&msRows.length){
+    let mr=msRows[0];
+    openingRow={
+      sortDate:new Date(mr.year,mr.month-1,1).getTime(),
+      date:new Date(mr.year,mr.month-1,1),
+      invoice:'-',lot:'-',
+      party:'យោងតាម Balance ខែចាស់ / Previous month balance',
+      qtyIn:null,qtyOut:null,adj:null,
+      balance:mr.opening||0,
+      expiry:null,note:'-'
+    };
+  }
+
+  // Merge Stock In + Stock Out logs, each carrying its own lot (Lot Tracking)
+  let entries=[];
+  (inLogs||[]).forEach(l=>entries.push({
+    sortDate:new Date(l.created_at||l.date).getTime(),
+    date:l.date?new Date(l.date):new Date(l.created_at),
+    invoice:l.order_code||'-',
+    lot:l.lot||'-',
+    party:l.supplier||l.source||'TSNH',
+    qtyIn:l.qty||0,qtyOut:null,adj:null,
+    expiry:l.expiry,
+    note:l.created_by_name||''
+  }));
+  (outLogs||[]).forEach(l=>entries.push({
+    sortDate:new Date(l.created_at||l.date).getTime(),
+    date:l.date?new Date(l.date):new Date(l.created_at),
+    invoice:l.item_ref||'-',
+    lot:l.lot||'-',
+    party:(l.department||l.ward)?('បញ្ចេញប្រើ — '+(l.department||l.ward)):'បញ្ចេញប្រើ',
+    qtyIn:null,qtyOut:l.qty||0,adj:null,
+    expiry:l.item_expiry||l.expiry,
+    note:l.created_by_name||''
+  }));
+  entries.sort((a,b)=>a.sortDate-b.sortDate);
+
+  // Running balance, starting from opening baseline (or 0 if none found)
+  let runningBal=openingRow?openingRow.balance:0;
+  let rows=[];
+  if(openingRow)rows.push(openingRow);
+  entries.forEach(e=>{
+    runningBal+=(e.qtyIn||0)-(e.qtyOut||0);
+    rows.push({...e,balance:runningBal});
+  });
+
+  let bodyHTML=rows.length?rows.map(r=>`<tr>
+      <td style="white-space:nowrap">${r.date?fd(r.date):'-'}</td>
+      <td>${r.invoice||'-'}</td>
+      <td style="color:#185fa5;font-weight:600">${r.lot||'-'}</td>
+      <td>${r.party||'-'}</td>
+      <td style="text-align:right;color:#0f6e56;font-weight:600">${r.qtyIn!=null?r.qtyIn:''}</td>
+      <td style="text-align:right;color:#a32d2d;font-weight:600">${r.qtyOut!=null?r.qtyOut:''}</td>
+      <td style="text-align:right">${r.adj!=null?r.adj:''}</td>
+      <td style="text-align:right;font-weight:800">${r.balance}</td>
+      <td style="white-space:nowrap">${r.expiry?fd(r.expiry):'-'}</td>
+      <td style="font-size:10px;color:#888">${r.note||'-'}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="10"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+
+  doPrint(`
+    <div class="header" style="text-align:center">
+      <div style="font-weight:700;font-size:16px">សលាកប័ត្រឃ្លាំង</div>
+      <div style="font-weight:700;font-size:13px;letter-spacing:1px;color:#185fa5">STOCK / BIN CARD</div>
+    </div>
+    <div style="font-size:12px;margin-bottom:4px"><b>លេខកូដ / Code:</b> ${item.code}</div>
+    <div style="font-size:12px;margin-bottom:4px"><b>ឈ្មោះជាទូទៅ (General Name):</b> ${item.name}</div>
+    <div style="font-size:12px;margin-bottom:8px;display:flex;justify-content:space-between">
+      <span><b>កំរិត (Strength/Size):</b> ${item.size||'-'}</span>
+      <span><b>ឯកតា (Unit):</b> ${item.unit||'-'}</span>
+      <span><b>ប្រភេទ (Category):</b> ${item.category||'-'}</span>
+      <span><b>Min Stock:</b> ${item.min_stock||0}</span>
+    </div>
+    <table><thead><tr>
+      <th>ថ្ងៃខែឆ្នាំ<br>Date</th>
+      <th>លេខវិក័យប័ត្រ<br>Invoice No.</th>
+      <th>លេខឡូត៍<br>Lot</th>
+      <th>អង្គភាពផ្គត់ផ្គង់<br>Received from/Issued to</th>
+      <th>ចំនួនចូល<br>Stock In</th>
+      <th>ចំនួនចេញ<br>Stock Out</th>
+      <th>កែតម្រូវ<br>Adjustment</th>
+      <th>តុល្យការ<br>Balance</th>
+      <th>ថ្ងៃផុតកំណត់<br>Expiry</th>
+      <th>ផ្សេងៗ<br>Observation</th>
+    </tr></thead>
+    <tbody>${bodyHTML}</tbody></table>
+    <div style="margin-top:30px;display:flex;justify-content:space-between;font-size:11px">
+      <div>Prepared by: _______________________</div>
+      <div>Verified by (Store Keeper): _______________________</div>
+    </div>`);
+}
+
 async function deleteItem(code,name){
   // Step 1: First confirmation
   if(!confirm(`⚠️ លុប Item: [${code}] ${name}?\n\nការលុបនឹងប៉ះពាល់:\n• Stock In/Out logs\n• Item Lots tracking\n• Reports & History\n\nចុច OK ដើម្បីបន្ត...`))return;
@@ -1715,6 +2370,7 @@ async function deleteItem(code,name){
 }
 
 async function openEditItem(code){
+  await Promise.all(['storage_area','storage_condition','supplier','source','brand','supply_type','item_status','category','shelf'].map(t=>getListItems(t)));
   refreshDynLists();
   let {data:i}=await db.from('items').select('*').eq('code',code).single();
   if(!i)return;
@@ -1731,10 +2387,19 @@ async function openEditItem(code){
     <div class="form-group"><label>Source</label>${comboField('ei-src',i.source||'',[...SOURCES],'Source...')}</div>
     <div class="form-group"><label>Unit Price ($)</label><input id="ei-price" type="number" value="${i.unit_price||0}"></div>
     <div class="form-group"><label>Minimum Stock</label><input id="ei-min" type="number" value="${i.min_stock||5}"></div>
-    <div class="form-group"><label>Stock Adjustment (+/-)</label><input id="ei-adj" type="number" value="0" placeholder="+5 ឬ -3"></div>
+    <div class="form-group"><label>ស្តុកដើមគ្រា (Opening Stock)</label>
+      <input id="ei-open" type="number" value="${i.opening_stock||0}" min="0" placeholder="0">
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">⚠️ នឹង set Balance = Opening Stock ថ្មី (ប្រើសម្រាប់ចាប់ផ្តើម)</div>
+    </div>
+    <div class="form-group"><label>Stock Adjustment (+/-) <span style="font-size:11px;color:var(--muted)">(items ខូច/ផុតកំណត់)</span></label><input id="ei-adj" type="number" value="0" placeholder="+5 ឬ -3"></div>
     <div class="form-group"><label>Storage Condition</label>${comboField('ei-sto',i.storage_condition||'',[...DYN_STORAGE],'Storage condition...')}</div>
     <div class="form-group"><label>Storage Area</label>${comboField('ei-area',i.storage_area||'',[...DYN_AREAS],'Storage area...')}</div>
-    <div class="form-group"><label>ISO Clause</label><input id="ei-iso" value="${i.iso_clause||'8.4'}"></div>
+    <div class="form-group"><label>AMC</label><input id="ei-amc" type="number" min="0" step="0.1" value="${i.amc||''}" oninput="calcMOS()" data-bal="${i.balance||0}" placeholder="Average Monthly Consumption"></div>
+    <div class="form-group"><label>Supply Type</label><select id="ei-supply-type"><option value="">-- None --</option></select></div>
+    <div class="form-group"><label>Status</label><select id="ei-item-status"><option value="">-- None --</option></select></div>
+    <div class="form-group"><label>MOS (Auto)</label><input id="ei-mos" type="number" step="0.1" readonly style="background:var(--bg);color:var(--muted)" placeholder="Auto calc..."></div>
+    <div class="form-group"><label>Required Order (Auto)</label><input id="ei-req-order" type="number" readonly style="background:var(--bg);color:var(--muted)" placeholder="Auto calc..."></div>
+    <div class="form-group"><label>Shelf</label>${comboField('ei-shelf',i.shelf||'',[...DYN_SHELVES],'e.g. A1, B2...')}</div>
     <div class="form-group"><label>Remarks</label><input id="ei-rem" value="${i.remarks||''}"></div>
   </div>
   <div style="background:#e8f0fb;border-radius:8px;padding:8px 12px;font-size:12px;color:var(--blue);margin-top:8px;display:flex;gap:16px">
@@ -1742,18 +2407,95 @@ async function openEditItem(code){
     <span>Stock Out: <strong>${i.stock_out||0}</strong></span><span>Value: <strong>$${((i.balance||0)*(i.unit_price||0)).toFixed(2)}</strong></span>
   </div>
   <div class="modal-footer"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEdit('${code}',${i.balance})"><i class="ti ti-check"></i> Save</button></div>`);
+  setTimeout(()=>{
+    document.getElementById('ei-name')?.focus();
+    // Rebuild Supply Type dropdown from DB
+    var supSel=document.getElementById('ei-supply-type');
+    if(supSel){
+      var opts=DYN_SUPPLY_TYPES.length?DYN_SUPPLY_TYPES:['Supply for 1 month','Supply for 3 months'];
+      supSel.innerHTML='<option value="">-- None --</option>'+opts.map(t=>'<option value="'+t+'"'+(i&&i.supply_type===t?' selected':'')+'>'+t+'</option>').join('');
+      supSel.onchange=calcMOS;
+    }
+    // Rebuild Status dropdown from DB
+    var staSel=document.getElementById('ei-item-status');
+    if(staSel){
+      var sOpts=DYN_STATUSES.length?DYN_STATUSES:['Active','Inactive','Discontinued'];
+      staSel.innerHTML='<option value="">-- None --</option>'+sOpts.map(s=>'<option value="'+s+'"'+(i&&i.item_status===s?' selected':'')+'>'+s+'</option>').join('');
+    }
+    calcMOS();
+  },150);
 }
+function calcMOS(){
+  var amcEl=document.getElementById('ei-amc');
+  if(!amcEl)return;
+  var openEl=document.getElementById('ei-open');
+  var bal=openEl?parseFloat(openEl.value||0):parseFloat(amcEl.getAttribute('data-bal')||0);
+  var amc=parseFloat(amcEl.value||0);
+  var supplyType=document.getElementById('ei-supply-type')?.value||'';
+  var mosEl=document.getElementById('ei-mos');
+  var reqEl=document.getElementById('ei-req-order');
+  var statusEl=document.getElementById('ei-item-status');
+
+  if(amc>0){
+    var mos=bal/amc;
+    if(mosEl)mosEl.value=mos.toFixed(2);
+
+    // Required Order based on Supply Type
+    var supplyMonths=supplyType.includes('3')?6:3;
+    var req=Math.max(0,Math.ceil(amc*supplyMonths-bal));
+    if(reqEl)reqEl.value=req;
+
+    // Auto Status based on ISO 15189 / Supply Type
+    if(statusEl){
+      var status='';
+      if(supplyType==='Supply for 3 months'){
+        if(mos===0) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('out of stock'))||'Out of stock';
+        else if(mos<3) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('toward'))||'Toward out of stock';
+        else if(mos<=6) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('sufficient'))||'Sufficient stock';
+        else status=DYN_STATUSES.find(s=>s.toLowerCase().includes('excess'))||'Stock excessive';
+      } else {
+        // Supply for 1 month (default)
+        if(mos===0) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('out of stock'))||'Out of stock';
+        else if(mos<0.5) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('toward'))||'Toward out of stock';
+        else if(mos<=3) status=DYN_STATUSES.find(s=>s.toLowerCase().includes('sufficient'))||'Sufficient stock';
+        else status=DYN_STATUSES.find(s=>s.toLowerCase().includes('excess'))||'Stock excessive';
+      }
+      // Set status dropdown if option exists, else keep
+      var found=false;
+      for(var o of statusEl.options){if(o.value===status){statusEl.value=status;found=true;break;}}
+      if(!found&&status){
+        var opt=document.createElement('option');
+        opt.value=status;opt.text=status;
+        statusEl.appendChild(opt);
+        statusEl.value=status;
+      }
+    }
+  } else {
+    if(mosEl)mosEl.value='';
+    if(reqEl)reqEl.value='';
+  }
+}
+
 async function saveEdit(code,oldBal){
   let adj=parseInt(document.getElementById('ei-adj').value)||0;
+  let openStock=parseInt(document.getElementById('ei-open')?.value);
+  let useOpen=document.getElementById('ei-open')&&openStock!==oldBal&&!isNaN(openStock);
+  let newBalance=useOpen?openStock+adj:oldBal+adj;
   let {error}=await db.from('items').update({
     name:document.getElementById('ei-name').value,ref:document.getElementById('ei-ref').value,
     lot:document.getElementById('ei-lot').value,date_in:document.getElementById('ei-datein').value||null,
     expiry:document.getElementById('ei-exp').value||null,brand:comboVal('ei-brand'),supplier:comboVal('ei-sup'),source:comboVal('ei-src'),
     unit_price:parseFloat(document.getElementById('ei-price').value)||0,
     min_stock:parseInt(document.getElementById('ei-min').value)||0,
-    balance:oldBal+adj,adjustment:adj,
+    opening_stock:useOpen?openStock:undefined,
+    balance:newBalance,adjustment:(useOpen?0:adj),
     storage_condition:comboVal('ei-sto'),storage_area:comboVal('ei-area'),
-    iso_clause:document.getElementById('ei-iso').value,remarks:document.getElementById('ei-rem').value
+    shelf:comboVal('ei-shelf'),
+    amc:parseFloat(document.getElementById('ei-amc')?.value)||0,
+    supply_type:document.getElementById('ei-supply-type')?.value||'',
+    item_status:document.getElementById('ei-item-status')?.value||'',
+    required_order:parseInt(document.getElementById('ei-req-order')?.value)||0,
+    remarks:document.getElementById('ei-rem')?.value||''
   }).eq('code',code);
   if(error){toast('Error: '+error.message,'error');return}
   closeModal();loadInventory();toast('Item '+code+' បានកែ!');
@@ -1983,13 +2725,15 @@ async function submitBatchStockIn(){
     let newStockIn=(item.stock_in||0)+b.qty;
 
     // Update item total balance + stock_in + unit + size
-    await db.from('items').update({
+    let {error:e3}=await db.from('items').update({
       balance:newBal,
       stock_in:newStockIn,
       unit:b.unit||item.unit||'',
       size:b.size||item.size||'',
       date_in:b.datein||null
     }).eq('code',b.code);
+    if(e3){toast('❌ Stock In បរាជ័យ ['+b.code+']! — '+e3.message,'error');continue;}
+    await syncMonthlyStock(b.code,b.name,item.category||'','in',b.qty);
 
     // Update/Insert item_lots for this specific lot
     let {data:existLot}=await db.from('item_lots').select('*').eq('item_code',b.code).eq('lot',b.lot||'').single();
@@ -2030,6 +2774,7 @@ async function submitBatchStockIn(){
   batchItems=[];
   await loadMeta();
   renderBatch();
+  if(_monthlyMode&&document.getElementById('page-inventory')?.classList.contains('active'))loadInventory();
   loadSIHist();
 }
 
@@ -2213,10 +2958,12 @@ async function submitLotStockOut(){
 
   // Update item total balance
   let {data:itemData}=await db.from('items').select('balance,stock_out').eq('code',item.code).single();
-  await db.from('items').update({
+  let {error:updErr}=await db.from('items').update({
     balance:(itemData?.balance||0)-qty,
     stock_out:(itemData?.stock_out||0)+qty
   }).eq('code',item.code);
+  if(updErr){toast('❌ Stock Out បរាជ័យ! Balance មិនបានកែទេ — '+updErr.message,'error');return;}
+  await syncMonthlyStock(item.code,item.name,item.category||'','out',qty);
 
   // Insert stock_out_log with full lot+ref+expiry traceability
   await db.from('stock_out_log').insert({
@@ -2259,9 +3006,15 @@ async function submitManualStockOut(){
   let cord=document.getElementById('so-cord').value;
   let note=document.getElementById('so-note').value;
   if(!qty||qty<1){toast('សូមបញ្ចូល Quantity!','error');return}
-  if(item.balance<qty){toast('Stock មិនគ្រប់! Balance: '+item.balance,'error');return}
-  let newBal=item.balance-qty;
-  await db.from('items').update({balance:newBal,stock_out:(item.stock_out||0)+qty}).eq('code',item.code);
+  // Fetch fresh balance/stock_out from DB to avoid stale-cache overwrite
+  let {data:freshItem}=await db.from('items').select('balance,stock_out').eq('code',item.code).single();
+  let curBal=freshItem?.balance??item.balance;
+  let curOut=freshItem?.stock_out??item.stock_out;
+  if(curBal<qty){toast('Stock មិនគ្រប់! Balance: '+curBal,'error');return}
+  let newBal=curBal-qty;
+  let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(curOut||0)+qty}).eq('code',item.code);
+  if(updErr){toast('❌ Stock Out បរាជ័យ! Balance មិនបានកែទេ — '+updErr.message,'error');return;}
+  await syncMonthlyStock(item.code,item.name,item.category||'','out',qty);
   let dateStr=today.toISOString().split('T')[0];
   await db.from('stock_out_log').insert({
     date:dateStr,item_code:item.code,item_name:item.name,
@@ -2658,7 +3411,114 @@ async function exportStockOutExcel(){
 }
 
 // ===== REQUESTS (Admin) =====
+async function loadReqTurnaround(){
+  let {data:allReqs}=await db.from('requests').select('*').order('created_at',{ascending:false}).limit(1000);
+  let reqs=(allReqs||[]).filter(r=>!(r.type==='PO'||r.req_no?.startsWith('PO-')));
+
+  let pending=reqs.filter(r=>r.status==='Pending');
+  let approved=reqs.filter(r=>r.status==='Approved');
+  let rejected=reqs.filter(r=>r.status==='Rejected');
+
+  let daysList=approved.filter(r=>r.created_at&&r.approved_at).map(r=>(new Date(r.approved_at)-new Date(r.created_at))/86400000);
+  let avgDays=daysList.length?(daysList.reduce((a,b)=>a+b,0)/daysList.length):0;
+
+  let now=new Date();
+  let overdue=pending.map(r=>({...r,waitDays:r.created_at?Math.floor((now-new Date(r.created_at))/86400000):0}))
+    .filter(r=>r.waitDays>3).sort((a,b)=>b.waitDays-a.waitDays);
+
+  let statEl=document.getElementById('req-turn-stats');
+  if(statEl)statEl.innerHTML=`
+    <div class="stat-card" style="background:#faeeda;border-color:#854f0b">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value" style="color:#854f0b">${pending.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#eaf3de;border-color:#3b6d11">
+      <div class="stat-label">Approved</div>
+      <div class="stat-value" style="color:#3b6d11">${approved.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#fcebeb;border-color:#a32d2d">
+      <div class="stat-label">Rejected</div>
+      <div class="stat-value" style="color:#a32d2d">${rejected.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb;border-color:#185fa5">
+      <div class="stat-label">ថ្ងៃមធ្យម → Approved</div>
+      <div class="stat-value" style="color:#185fa5">${avgDays.toFixed(1)}</div>
+      <div class="stat-sub">days</div>
+    </div>`;
+
+  let ovBody=document.getElementById('req-turn-overdue-body');
+  if(ovBody)ovBody.innerHTML=overdue.length?overdue.map(r=>`<tr>
+      <td style="font-weight:600;color:var(--blue)">${r.req_no}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(r.date)}</td>
+      <td style="font-size:12px">${r.department||'-'}</td>
+      <td style="font-size:12px">${r.ward||'-'}</td>
+      <td style="font-size:12px">${r.requested_by_name||'-'}</td>
+      <td style="text-align:right;font-weight:700;color:#a32d2d">${r.waitDays}</td>
+      <td>${reqBadge(r.status)}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="7"><div class="empty">គ្មាន request ណារង់ចាំលើសពី 3 ថ្ងៃ ✓</div></td></tr>';
+
+  // ===== Pending by Item (join request_items for all Pending requests) =====
+  let pibBody=document.getElementById('req-turn-pending-item-body');
+  if(pibBody){
+    if(!pending.length){
+      pibBody.innerHTML='<tr><td colspan="6"><div class="empty">គ្មាន Pending request ទេ ✓</div></td></tr>';
+    } else {
+      let pendingIds=pending.map(r=>r.id);
+      let {data:pItems}=await db.from('request_items').select('*').in('request_id',pendingIds);
+      pItems=pItems||[];
+      // Legacy fallback: some old requests store item directly on the request row, not in request_items
+      let idsWithItems=new Set(pItems.map(pi=>pi.request_id));
+      pending.forEach(r=>{
+        if(!idsWithItems.has(r.id)&&r.item_code){
+          pItems.push({request_id:r.id,item_code:r.item_code,item_name:r.item_name,qty_requested:r.qty});
+        }
+      });
+      let byItem={};
+      pItems.forEach(pi=>{
+        let code=pi.item_code||'-';
+        if(!byItem[code])byItem[code]={name:pi.item_name||code,qty:0,reqIds:new Set(),depts:new Set()};
+        byItem[code].qty+=(pi.qty_requested||0);
+        byItem[code].reqIds.add(pi.request_id);
+        let ownerReq=pending.find(r=>r.id===pi.request_id);
+        if(ownerReq)byItem[code].depts.add(ownerReq.department||ownerReq.ward||'-');
+      });
+      let itemMapAll={};allItems.forEach(i=>{itemMapAll[i.code]=i});
+      let rows=Object.entries(byItem).map(([code,v])=>[code,{name:v.name,qty:v.qty,count:v.reqIds.size,extra:[...v.depts].join(', ')}]).sort((a,b)=>b[1].qty-a[1].qty);
+      window._reqPendingByItem=rows;window._reqItemMapAll=itemMapAll;
+      renderPendingByItemRows(rows,itemMapAll,'req-turn-pending-item-body','req');
+    }
+  }
+}
+
+function printReqTurnaround(){
+  let statsHTML=document.getElementById('req-turn-stats')?.innerHTML||'';
+  let ovHTML=document.getElementById('req-turn-overdue-body')?.innerHTML||'';
+  let itemMapAll=window._reqItemMapAll||{};
+  let pibHTML=(window._reqPendingByItem||[]).map(([code,v])=>`<tr>
+      <td>${code}</td><td>${v.name}</td><td>${itemMapAll[code]?.category||'-'}</td>
+      <td>${v.extra||'-'}</td><td style="text-align:right">${v.count}</td>
+      <td style="text-align:right;font-weight:700">${v.qty}</td>
+    </tr>`).join('')||'<tr><td colspan="6"><div class="empty">គ្មានទិន្នន័យ item</div></td></tr>';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — Request Turnaround Report</h2>
+      <div class="sub">Printed by: <b>${CU.full_name||CU.username}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#a32d2d">Request កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ</div>
+    <table><thead><tr><th>Req No</th><th>Date</th><th>Department</th><th>Ward</th><th>Requested By</th><th>រង់ចាំ (ថ្ងៃ)</th><th>Status</th></tr></thead>
+    <tbody>${ovHTML}</tbody></table>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#0f6e56">Pending by Item (ទាំងអស់)</div>
+    <table><thead><tr><th>Item Code</th><th>Item Name</th><th>Category</th><th>Department/Ward</th><th># Requests</th><th>Total Qty Pending</th></tr></thead>
+    <tbody>${pibHTML}</tbody></table>`);
+}
+
 async function loadAdminRequests(){
+  loadReqTurnaround();
   let status=document.getElementById('req-filter-status').value;
   let dept=document.getElementById('req-filter-dept')?.value||'';
   let ward=document.getElementById('req-filter-ward').value;
@@ -3067,10 +3927,14 @@ async function approveReqWithItems(reqId, itemCount){
     let lotSource=selectedOpt?selectedOpt.dataset.source:'';
     let lotBal=parseInt(selectedOpt?.dataset.bal||0);
     if(lotBal<qtyGiven){errors.push(code+' Lot '+(lotNo||'')+' (Balance:'+lotBal+')');continue}
-    // Update item total balance
-    let item=allItems.find(i=>i.code===code);
-    if(!item){let {data}=await db.from('items').select('*').eq('code',code).single();item=data;}
-    await db.from('items').update({balance:(item?.balance||0)-qtyGiven,stock_out:(item?.stock_out||0)+qtyGiven}).eq('code',code);
+    // Always fetch fresh balance from DB (avoid stale cache)
+    let {data:freshItem}=await db.from('items').select('*').eq('code',code).single();
+    let item=freshItem;
+    if(!item){errors.push(code+': item not found');continue;}
+    let newBal=Math.max(0,(item.balance||0)-qtyGiven);
+    let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(item.stock_out||0)+qtyGiven}).eq('code',code);
+    if(updErr){errors.push(code+': Balance update failed — '+updErr.message);continue;}
+    await syncMonthlyStock(code,item.name||code,item.category||'','out',qtyGiven);
     // Update item_lots
     if(lotId&&lotId!=='virtual'){
       let {data:el}=await db.from('item_lots').select('*').eq('id',lotId).single();
@@ -3093,7 +3957,9 @@ async function disapproveItem(reqId, riId, qtyGiven, itemCode){
   let item=allItems.find(i=>i.code===itemCode);
   if(!item){let {data}=await db.from('items').select('*').eq('code',itemCode).single();item=data;}
   if(item){
-    await db.from('items').update({balance:(item.balance||0)+qtyGiven,stock_out:Math.max(0,(item.stock_out||0)-qtyGiven)}).eq('code',itemCode);
+    let {error:updErr}=await db.from('items').update({balance:(item.balance||0)+qtyGiven,stock_out:Math.max(0,(item.stock_out||0)-qtyGiven)}).eq('code',itemCode);
+    if(updErr){toast('❌ ការត្រឡប់ Stock បរាជ័យ! — '+updErr.message,'error');return;}
+    await syncMonthlyStock(itemCode,item.name||itemCode,item.category||'','out',-qtyGiven);
   }
   // Remove stock_out_log for this item+request
   await db.from('stock_out_log').delete().eq('request_id',reqId).eq('item_code',itemCode);
@@ -3345,7 +4211,28 @@ async function loadMyDashboard(){
   } else if(dept){
     allI=allI.filter(i=>i.category===dept||i.category==='Consumables');
   }
+  // ===== Monthly data (same formula/table as admin Master Inventory) =====
+  if(_myMonthlyMode){
+    let monthlyMap=await getMonthlyData(_mySelectedMonth,_mySelectedYear);
+    allI=allI.map(i=>{
+      let mr=monthlyMap[i.code]||{};
+      return{...i,
+        _mOpening:mr.opening||0,
+        _mStockIn:mr.stock_in||0,
+        _mStockOut:mr.stock_out||0,
+        _mAdj:mr.adjustment||0,
+        _mBalance:(mr.opening||0)+(mr.stock_in||0)-(mr.stock_out||0)+(mr.adjustment||0)
+      };
+    });
+  } else {
+    allI=allI.map(i=>({...i,
+      _mOpening:i.opening_stock||0,_mStockIn:i.stock_in||0,_mStockOut:i.stock_out||0,
+      _mAdj:i.adjustment||0,_mBalance:i.balance||0
+    }));
+  }
   window._myDashItems=allI;
+  let counterEl=document.getElementById('my-dash-counter');
+  if(counterEl)counterEl.innerHTML=`📦 <strong style="color:var(--blue);font-size:15px">${allI.length}</strong> <span style="font-size:12px;color:var(--muted)">items</span>`;
   let catSel=document.getElementById('my-dash-cat');
   if(catSel&&dept&&!catSel.value)catSel.value=dept;
   renderMyBalance();
@@ -3362,18 +4249,19 @@ function renderMyBalance(){
   let filtered=items.filter(i=>{
     if(search&&!`${i.code}${i.name}`.toLowerCase().includes(search))return false;
     if(cat&&i.category!==cat)return false;
-    if(status==='ok'&&i.balance<=i.min_stock)return false;
-    if(status==='low'&&!(i.balance>0&&i.balance<=i.min_stock))return false;
-    if(status==='out'&&i.balance!==0)return false;
+    let bal=i._mBalance;
+    if(status==='ok'&&bal<=i.min_stock)return false;
+    if(status==='low'&&!(bal>0&&bal<=i.min_stock))return false;
+    if(status==='out'&&bal!==0)return false;
     return true;
   });
 
   // Stats
-  let totalIn=filtered.reduce((a,i)=>a+(i.stock_in||0),0);
-  let totalOut=filtered.reduce((a,i)=>a+(i.stock_out||0),0);
-  let totalBal=filtered.reduce((a,i)=>a+(i.balance||0),0);
-  let lowCount=filtered.filter(i=>i.balance<=i.min_stock&&i.balance>0).length;
-  let outCount=filtered.filter(i=>i.balance<=0).length;
+  let totalIn=filtered.reduce((a,i)=>a+(i._mStockIn||0),0);
+  let totalOut=filtered.reduce((a,i)=>a+(i._mStockOut||0),0);
+  let totalBal=filtered.reduce((a,i)=>a+(i._mBalance||0),0);
+  let lowCount=filtered.filter(i=>i._mBalance<=i.min_stock&&i._mBalance>0).length;
+  let outCount=filtered.filter(i=>i._mBalance<=0).length;
 
   let statEl=document.getElementById('my-dash-stats');
   if(statEl)statEl.innerHTML=`
@@ -3399,11 +4287,9 @@ function renderMyBalance(){
     </div>`;
 
   let body=document.getElementById('my-dash-body');if(!body)return;
+  window._myDashFiltered=filtered;
   body.innerHTML=filtered.length?filtered.map(i=>{
-    // Recalculate balance correctly
-    let calcBal=(i.opening_stock||0)+(i.stock_in||0)-(i.stock_out||0)+(i.adjustment||0);
-    // Use DB balance but verify consistency
-    let displayBal=i.balance||0;
+    let displayBal=i._mBalance||0;
     let balColor=displayBal<=0?'#a32d2d':displayBal<=i.min_stock?'#854f0b':'#3b6d11';
     let statusBadge=displayBal<=0
       ?'<span class="badge" style="background:#fcebeb;color:#a32d2d">Out of Stock</span>'
@@ -3418,13 +4304,49 @@ function renderMyBalance(){
       <td style="font-size:12px;white-space:nowrap">${fd(i.expiry)}</td>
       <td style="font-size:12px">${i.unit||'-'}</td>
       <td style="font-size:12px">${i.size||'-'}</td>
-      <td style="text-align:right;color:#555;font-weight:600">${i.opening_stock||0}</td>
-      <td style="text-align:right;color:#3b6d11;font-weight:600">+${i.stock_in||0}</td>
-      <td style="text-align:right;color:#a32d2d;font-weight:600">-${i.stock_out||0}</td>
+      <td style="text-align:right;color:#555;font-weight:600">${i._mOpening||0}</td>
+      <td style="text-align:right;color:#3b6d11;font-weight:600">+${i._mStockIn||0}</td>
+      <td style="text-align:right;color:#a32d2d;font-weight:600">-${i._mStockOut||0}</td>
       <td style="text-align:right;font-weight:800;font-size:16px;color:${balColor}">${displayBal}</td>
       <td>${statusBadge}</td>
+      <td><button class="btn btn-sm" onclick="printStockCard('${i.code}')" title="Print Stock/Bin Card"><i class="ti ti-printer"></i></button></td>
+    </tr>`;
+  }).join(''):'<tr><td colspan="13"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+}
+
+function printMyDashboard(){
+  let dept=CU.department||CU.ward||'ទាំងអស់';
+  let monthLabel=document.getElementById('my-dash-monthly-sel')?.options[document.getElementById('my-dash-monthly-sel')?.selectedIndex]?.text||'ខែនេះ';
+  let statsHTML=document.getElementById('my-dash-stats')?.innerHTML||'';
+  let rows=window._myDashFiltered||[];
+  let bodyHTML=rows.length?rows.map(i=>{
+    let bal=i._mBalance||0;
+    let status=bal<=0?'<span class="badge badge-expired">Out of Stock</span>':bal<=i.min_stock?'<span class="badge badge-reorder">Low Stock</span>':'<span class="badge badge-ok">OK</span>';
+    return`<tr>
+      <td>${i.code}</td><td>${i.name}</td><td>${i.category||'-'}</td>
+      <td>${i.lot||'-'}</td><td>${fd(i.expiry)}</td><td>${i.unit||'-'}</td><td>${i.size||'-'}</td>
+      <td style="text-align:right">${i._mOpening||0}</td>
+      <td style="text-align:right">+${i._mStockIn||0}</td>
+      <td style="text-align:right">-${i._mStockOut||0}</td>
+      <td style="text-align:right;font-weight:700">${bal}</td>
+      <td>${status}</td>
     </tr>`;
   }).join(''):'<tr><td colspan="12"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — Balance Dashboard</h2>
+      <div class="sub">Department: <b>${dept}</b> | Month: <b>${monthLabel}</b> | Requested by: <b>${CU.full_name||CU.username}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Lot No</th><th>Expiry</th>
+      <th>Unit</th><th>Size</th><th>Opening</th><th>Stock In</th><th>Stock Out</th><th>Balance</th><th>Status</th>
+    </tr></thead>
+    <tbody>${bodyHTML}</tbody></table>
+    <div style="margin-top:30px;display:flex;justify-content:space-between;font-size:11px">
+      <div>Prepared by: _______________________</div>
+      <div>Approved by (Department Head): _______________________</div>
+    </div>`);
 }
 
 function updateLotInfo(sel){
@@ -3627,8 +4549,14 @@ async function staffConfirmStockOut(code,name,unit,source,maxBal){
   // Update item balance
   let item=allItems.find(i=>i.code===code);
   if(!item)return;
-  let newBal=(item.balance||0)-qty;
-  await db.from('items').update({balance:newBal,stock_out:(item.stock_out||0)+qty}).eq('code',code);
+  let {data:freshIt}=await db.from('items').select('balance,stock_out,category').eq('code',code).single();
+  let curBal2=freshIt?.balance??item.balance;
+  let curOut2=freshIt?.stock_out??item.stock_out;
+  if(curBal2<qty){toast('Stock មិនគ្រប់! Balance: '+curBal2,'error');return;}
+  let newBal=curBal2-qty;
+  let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(curOut2||0)+qty}).eq('code',code);
+  if(updErr){toast('❌ Stock Out បរាជ័យ! — '+updErr.message,'error');return;}
+  await syncMonthlyStock(code,name,freshIt?.category||item.category||'','out',qty);
   // Update lot balance
   if(lot){
     let {data:existLot}=await db.from('item_lots').select('*').eq('item_code',code).eq('lot',lot).single();
@@ -3740,6 +4668,327 @@ function showAllSoLogs(){
       <td style="font-size:12px;color:var(--muted)">${l.created_by_name||'Admin'}</td>
     </tr>`;
   }).join('');
+}
+
+// ===== MY MONTHLY USAGE SUMMARY (Staff) =====
+async function loadMyUsageSummary(){
+  let dept=CU.department||CU.ward||'';
+  let lbl=document.getElementById('mu-dept-label');
+  if(lbl)lbl.textContent=dept?`Department: ${dept}`:'ទាំងអស់';
+  // Populate months (default = current month)
+  let mSel=document.getElementById('mu-month');
+  if(mSel&&mSel.options.length<=1){
+    let months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let y=new Date().getFullYear();
+    for(let m=0;m<12;m++){let v=`${y}-${String(m+1).padStart(2,'0')}`;let o=document.createElement('option');o.value=v;o.text=`${months[m]} ${y}`;mSel.appendChild(o);}
+  }
+  let month=mSel?.value||`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  let cat=document.getElementById('mu-cat')?.value||'';
+
+  // Reuse the same scoped fetch as My Stock Out (own transactions + department/ward transactions)
+  let {data:myLogs}=await db.from('stock_out_log').select('*')
+    .eq('created_by',CU.id)
+    .order('created_at',{ascending:false}).limit(1000);
+  let {data:deptLogs}=await db.from('stock_out_log').select('*')
+    .or(`ward.eq.${dept||'__none__'},department.eq.${dept||'__none__'}`)
+    .order('created_at',{ascending:false}).limit(500);
+  let allLogs=[...(myLogs||[]),...(deptLogs||[])];
+  let seen=new Set();
+  let logs=allLogs.filter(l=>{if(seen.has(l.id))return false;seen.add(l.id);return true;});
+  if(month)logs=logs.filter(l=>l.date&&l.date.startsWith(month));
+  let itemMap={};allItems.forEach(i=>{itemMap[i.code]=i});
+  if(cat)logs=logs.filter(l=>itemMap[l.item_code]?.category===cat);
+
+  // ===== Stats =====
+  let totalQty=logs.reduce((a,l)=>a+(l.qty||0),0);
+  let distinctItems=new Set(logs.map(l=>l.item_code)).size;
+  let totalValue=logs.reduce((a,l)=>a+((l.qty||0)*(itemMap[l.item_code]?.unit_price||0)),0);
+  let byCat={};
+  logs.forEach(l=>{
+    let c=itemMap[l.item_code]?.category||'មិនកំណត់';
+    if(!byCat[c])byCat[c]={qty:0,tx:0,items:new Set()};
+    byCat[c].qty+=(l.qty||0);byCat[c].tx++;byCat[c].items.add(l.item_code);
+  });
+  let topCat=Object.entries(byCat).sort((a,b)=>b[1].qty-a[1].qty)[0];
+
+  let statEl=document.getElementById('mu-stats');
+  if(statEl)statEl.innerHTML=`
+    <div class="stat-card" style="background:#fcebeb;border-color:#a32d2d">
+      <div class="stat-label">Total Transactions</div>
+      <div class="stat-value" style="color:#a32d2d">${logs.length}</div>
+      <div class="stat-sub">records</div>
+    </div>
+    <div class="stat-card" style="background:#faeeda;border-color:#854f0b">
+      <div class="stat-label">Total Qty ប្រើប្រាស់</div>
+      <div class="stat-value" style="color:#854f0b">${totalQty}</div>
+      <div class="stat-sub">units</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb;border-color:#185fa5">
+      <div class="stat-label">Item ខុសគ្នា</div>
+      <div class="stat-value" style="color:#185fa5">${distinctItems}</div>
+      <div class="stat-sub">items</div>
+    </div>
+    <div class="stat-card" style="background:#eaf3de;border-color:#3b6d11">
+      <div class="stat-label">Category ប្រើច្រើនបំផុត</div>
+      <div class="stat-value" style="color:#3b6d11;font-size:16px">${topCat?topCat[0]:'-'}</div>
+      <div class="stat-sub">${topCat?topCat[1].qty+' units':''}</div>
+    </div>
+    <div class="stat-card" style="background:#fbeaf0;border-color:#993556">
+      <div class="stat-label">Total Value ($)</div>
+      <div class="stat-value" style="color:#993556">${totalValue.toFixed(2)}</div>
+      <div class="stat-sub">estimated cost</div>
+    </div>`;
+
+  // ===== Category breakdown table =====
+  let catBody=document.getElementById('mu-cat-body');
+  let catRows=Object.entries(byCat).sort((a,b)=>b[1].qty-a[1].qty);
+  if(catBody)catBody.innerHTML=catRows.length?catRows.map(([c,v])=>`<tr>
+      <td style="font-weight:500">${c}</td>
+      <td style="text-align:right">${v.items.size}</td>
+      <td style="text-align:right">${v.tx}</td>
+      <td style="text-align:right;font-weight:700;color:#854f0b">${v.qty}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="4"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+
+  // ===== Top 10 items table =====
+  let byItem={};
+  logs.forEach(l=>{
+    if(!byItem[l.item_code])byItem[l.item_code]={qty:0,name:l.item_name||itemMap[l.item_code]?.name||l.item_code,unit:l.unit||itemMap[l.item_code]?.unit||'-'};
+    byItem[l.item_code].qty+=(l.qty||0);
+  });
+  let topItems=Object.entries(byItem).sort((a,b)=>b[1].qty-a[1].qty).slice(0,10);
+  let topBody=document.getElementById('mu-top-body');
+  window._muTopItems=topItems;window._muCatRows=catRows;window._muMonth=month;window._muStats={totalQty,distinctItems,tx:logs.length,totalValue};
+  if(topBody)topBody.innerHTML=topItems.length?topItems.map(([code,v])=>`<tr>
+      <td><code>${code}</code></td>
+      <td style="font-weight:500">${v.name}</td>
+      <td style="font-size:12px;color:var(--muted)">${itemMap[code]?.category||'-'}</td>
+      <td style="text-align:right;font-weight:700;color:#854f0b">${v.qty}</td>
+      <td style="font-size:12px">${v.unit}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="5"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+}
+
+function printMyUsage(){
+  let month=document.getElementById('mu-month')?.options[document.getElementById('mu-month')?.selectedIndex]?.text||'ខែនេះ';
+  let dept=CU.department||CU.ward||'ទាំងអស់';
+  let statsHTML=document.getElementById('mu-stats')?.innerHTML||'';
+  let catHTML=document.getElementById('mu-cat-body')?.innerHTML||'';
+  let topHTML=document.getElementById('mu-top-body')?.innerHTML||'';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — My Monthly Usage Summary</h2>
+      <div class="sub">Department/Ward: <b>${dept}</b> | Month: <b>${month}</b> | Requested by: <b>${CU.full_name||CU.username}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#185fa5">តាម Category</div>
+    <table><thead><tr><th>Category</th><th>Item ចំនួន</th><th>Transactions</th><th>Total Qty</th></tr></thead>
+    <tbody>${catHTML}</tbody></table>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#185fa5">Top 10 Item ប្រើប្រាស់ច្រើនបំផុត</div>
+    <table><thead><tr><th>Item Code</th><th>Item Name</th><th>Category</th><th>Qty</th><th>Unit</th></tr></thead>
+    <tbody>${topHTML}</tbody></table>
+    <div style="margin-top:30px;display:flex;justify-content:space-between;font-size:11px">
+      <div>Prepared by: _______________________</div>
+      <div>Approved by (Department Head): _______________________</div>
+    </div>`);
+}
+
+function exportMyUsageCSV(){
+  let topItems=window._muTopItems||[];
+  let catRows=window._muCatRows||[];
+  let month=window._muMonth||'';
+  let rows=[['My Monthly Usage Summary'],['Month',month],['Department',CU.department||CU.ward||''],[],
+    ['Category','Item Count','Transactions','Total Qty']];
+  catRows.forEach(([c,v])=>rows.push([c,v.items.size,v.tx,v.qty]));
+  rows.push([]);
+  rows.push(['Top Items','','','Qty','Unit']);
+  topItems.forEach(([code,v])=>rows.push([code,v.name,'',v.qty,v.unit]));
+  let csv=rows.map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  let blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  let a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`My_Usage_Summary_${month||'report'}.csv`;
+  a.click();
+}
+
+// ===== REQUEST TURNAROUND REPORT (Staff) =====
+async function loadMyTurnaround(){
+  let dept=CU.department||CU.ward||'';
+  let lbl=document.getElementById('mt-dept-label');
+  if(lbl)lbl.textContent=dept?`Department: ${dept}`:'ទាំងអស់';
+  let mSel=document.getElementById('mt-month');
+  if(mSel&&mSel.options.length<=1){
+    let months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let y=new Date().getFullYear();
+    for(let m=0;m<12;m++){let v=`${y}-${String(m+1).padStart(2,'0')}`;let o=document.createElement('option');o.value=v;o.text=`${months[m]} ${y}`;mSel.appendChild(o);}
+  }
+  let month=mSel?.value||'';
+  let {data:reqs}=await db.from('requests').select('*').eq('requested_by',CU.id).order('created_at',{ascending:false}).limit(500);
+  reqs=(reqs||[]).filter(r=>!(r.type==='PO'||r.req_no?.startsWith('PO-')));
+  if(month)reqs=reqs.filter(r=>r.date&&r.date.startsWith(month));
+
+  let pending=reqs.filter(r=>r.status==='Pending');
+  let approved=reqs.filter(r=>r.status==='Approved');
+  let rejected=reqs.filter(r=>r.status==='Rejected');
+
+  // Average days from created_at -> approved_at (for Approved requests only)
+  let daysList=approved.filter(r=>r.created_at&&r.approved_at).map(r=>(new Date(r.approved_at)-new Date(r.created_at))/86400000);
+  let avgDays=daysList.length?(daysList.reduce((a,b)=>a+b,0)/daysList.length):0;
+
+  // Overdue pending (>3 days waiting)
+  let now=new Date();
+  let overdue=pending.map(r=>({...r,waitDays:r.created_at?Math.floor((now-new Date(r.created_at))/86400000):0}))
+    .filter(r=>r.waitDays>3).sort((a,b)=>b.waitDays-a.waitDays);
+
+  let statEl=document.getElementById('mt-stats');
+  if(statEl)statEl.innerHTML=`
+    <div class="stat-card" style="background:#faeeda;border-color:#854f0b">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value" style="color:#854f0b">${pending.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#eaf3de;border-color:#3b6d11">
+      <div class="stat-label">Approved</div>
+      <div class="stat-value" style="color:#3b6d11">${approved.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#fcebeb;border-color:#a32d2d">
+      <div class="stat-label">Rejected</div>
+      <div class="stat-value" style="color:#a32d2d">${rejected.length}</div>
+      <div class="stat-sub">requests</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb;border-color:#185fa5">
+      <div class="stat-label">ថ្ងៃមធ្យម → Approved</div>
+      <div class="stat-value" style="color:#185fa5">${avgDays.toFixed(1)}</div>
+      <div class="stat-sub">days</div>
+    </div>`;
+
+  let ovBody=document.getElementById('mt-overdue-body');
+  if(ovBody)ovBody.innerHTML=overdue.length?overdue.map(r=>`<tr>
+      <td style="font-weight:600;color:var(--blue)">${r.req_no}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(r.date)}</td>
+      <td style="font-size:12px">${r.item_name||r.item_code||'-'}</td>
+      <td style="text-align:right;font-size:12px">${r.qty||'-'}</td>
+      <td style="text-align:right;font-weight:700;color:#a32d2d">${r.waitDays}</td>
+      <td>${reqBadge(r.status)}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="6"><div class="empty">គ្មាន request ណារង់ចាំលើសពី 3 ថ្ងៃ ✓</div></td></tr>';
+
+  window._mtAllReqs=reqs;
+  let body=document.getElementById('mt-body');
+  if(body)body.innerHTML=reqs.length?reqs.slice(0,50).map(r=>{
+    let days=(r.approved_at&&r.created_at)?((new Date(r.approved_at)-new Date(r.created_at))/86400000).toFixed(1):'-';
+    return`<tr>
+      <td style="font-weight:600;color:var(--blue)">${r.req_no}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(r.date)}</td>
+      <td style="font-size:12px">${r.item_name||r.item_code||'-'}</td>
+      <td style="text-align:right;font-size:12px">${r.qty||'-'}</td>
+      <td>${reqBadge(r.status)}</td>
+      <td style="text-align:right;font-size:12px">${days}</td>
+    </tr>`;
+  }).join('')
+    :'<tr><td colspan="6"><div class="empty">គ្មានទិន្នន័យ</div></td></tr>';
+}
+
+function printMyTurnaround(){
+  let month=document.getElementById('mt-month')?.options[document.getElementById('mt-month')?.selectedIndex]?.text||'ទាំងអស់';
+  let statsHTML=document.getElementById('mt-stats')?.innerHTML||'';
+  let ovHTML=document.getElementById('mt-overdue-body')?.innerHTML||'';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — Request Turnaround Report</h2>
+      <div class="sub">Requested by: <b>${CU.full_name||CU.username}</b> | Month: <b>${month}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#a32d2d">Request កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ</div>
+    <table><thead><tr><th>Req No</th><th>Date</th><th>Item</th><th>Qty</th><th>រង់ចាំ (ថ្ងៃ)</th><th>Status</th></tr></thead>
+    <tbody>${ovHTML}</tbody></table>`);
+}
+
+// ===== EXPIRY ALERT SCOPED (Staff) =====
+async function loadMyExpiryAlert(){
+  let dept=CU.department||CU.ward||'';
+  let lbl=document.getElementById('me-dept-label');
+  if(lbl)lbl.textContent=dept?`Department: ${dept}`:'ទាំងអស់ item';
+  let range=parseInt(document.getElementById('me-range')?.value)||60;
+  let cat=document.getElementById('me-cat')?.value||'';
+
+  // Scope items to this staff's visibility (same pattern as My Dashboard)
+  let visCats=window._myVisCats||[],visItems=window._myVisItems||[];
+  let hasVis=visCats.length>0||visItems.length>0;
+  let items=allItems.slice();
+  if(hasVis){
+    items=items.filter(i=>visCats.includes(i.category)||visItems.includes(i.code));
+  } else if(dept){
+    items=items.filter(i=>i.category===dept||i.category==='Consumables');
+  }
+  if(cat)items=items.filter(i=>i.category===cat);
+
+  let expiring=items.filter(i=>{let d=daysDiff(i.expiry);return d<=range&&d>=0;})
+    .sort((a,b)=>daysDiff(a.expiry)-daysDiff(b.expiry));
+
+  let d30=expiring.filter(i=>daysDiff(i.expiry)<=30).length;
+  let d60=expiring.filter(i=>daysDiff(i.expiry)>30&&daysDiff(i.expiry)<=60).length;
+  let d90=expiring.filter(i=>daysDiff(i.expiry)>60&&daysDiff(i.expiry)<=90).length;
+
+  let statEl=document.getElementById('me-stats');
+  if(statEl)statEl.innerHTML=`
+    <div class="stat-card" style="background:#fcebeb;border-color:#a32d2d">
+      <div class="stat-label">≤30 ថ្ងៃ (បន្ទាន់)</div>
+      <div class="stat-value" style="color:#a32d2d">${d30}</div>
+      <div class="stat-sub">items</div>
+    </div>
+    <div class="stat-card" style="background:#faeeda;border-color:#854f0b">
+      <div class="stat-label">31-60 ថ្ងៃ</div>
+      <div class="stat-value" style="color:#854f0b">${d60}</div>
+      <div class="stat-sub">items</div>
+    </div>
+    <div class="stat-card" style="background:#fff8e1;border-color:#9a7d0a">
+      <div class="stat-label">61-90 ថ្ងៃ</div>
+      <div class="stat-value" style="color:#9a7d0a">${d90}</div>
+      <div class="stat-sub">items</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb;border-color:#185fa5">
+      <div class="stat-label">សរុប</div>
+      <div class="stat-value" style="color:#185fa5">${expiring.length}</div>
+      <div class="stat-sub">items</div>
+    </div>`;
+
+  window._meRows=expiring;
+  let body=document.getElementById('me-body');
+  if(body)body.innerHTML=expiring.length?expiring.map(i=>{
+    let d=daysDiff(i.expiry);
+    let color=d<=30?'#a32d2d':d<=60?'#854f0b':'#9a7d0a';
+    return`<tr>
+      <td><code>${i.code}</code></td>
+      <td style="font-weight:500">${i.name}</td>
+      <td style="font-size:12px;color:var(--muted)">${i.category||'-'}</td>
+      <td style="font-size:12px;color:#185fa5">${i.lot||'-'}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(i.expiry)}</td>
+      <td style="text-align:right;font-weight:700;color:${color}">${d}</td>
+      <td style="text-align:right">${i.balance||0}</td>
+      <td style="font-size:12px">${i.unit||'-'}</td>
+    </tr>`;
+  }).join('')
+    :'<tr><td colspan="8"><div class="empty">គ្មាន item ជិត Expiry ✓</div></td></tr>';
+}
+
+function printMyExpiry(){
+  let range=document.getElementById('me-range')?.options[document.getElementById('me-range')?.selectedIndex]?.text||'';
+  let dept=CU.department||CU.ward||'ទាំងអស់';
+  let statsHTML=document.getElementById('me-stats')?.innerHTML||'';
+  let bodyHTML=document.getElementById('me-body')?.innerHTML||'';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — Expiry Alert Report</h2>
+      <div class="sub">Department/Ward: <b>${dept}</b> | Range: <b>${range}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Category</th><th>Lot No</th>
+      <th>Expiry Date</th><th>ថ្ងៃនៅសល់</th><th>Balance</th><th>Unit</th>
+    </tr></thead>
+    <tbody>${bodyHTML}</tbody></table>`);
 }
 
 async function loadMyRequests(filter){
@@ -4384,10 +5633,11 @@ async function printInventory(){
   let thStyle='padding:6px 7px;border:1px solid #0c447c;font-size:10px;white-space:nowrap;text-align:';
   let tdStyle='padding:5px 7px;border:1px solid #e0e0e0;font-size:10px;text-align:';
 
-  let theadCells=chosen.map(c=>`<th style="${thStyle}${c.align}">${c.label}</th>`).join('');
+  let theadCells=`<th style="${thStyle}center;width:30px">#</th>`+chosen.map(c=>`<th style="${thStyle}${c.align}">${c.label}</th>`).join('');
   let rows=items.map((i,idx)=>{
+    let numCell=`<td style="${tdStyle}center;${idx%2===0?'':'background:#fafaf8'};color:#888;font-size:9px">${idx+1}</td>`;
     let cells=chosen.map(c=>`<td style="${tdStyle}${c.align};${idx%2===0?'':'background:#fafaf8'}">${getCellVal(i,c.key)}</td>`).join('');
-    return`<tr>${cells}</tr>`;
+    return`<tr>${numCell}${cells}</tr>`;
   }).join('');
 
   let totalItems=items.length;
@@ -4576,7 +5826,121 @@ async function submitPOFromModal(){
 }
 
 // ===== LOAD PO LIST =====
+// ===== PO REQUEST TURNAROUND (Admin, all POs) =====
+async function loadPOTurnaround(){
+  let {data:allReqs}=await db.from('requests').select('*').order('created_at',{ascending:false}).limit(1000);
+  let pos=(allReqs||[]).filter(r=>r.type==='PO'||r.req_no?.startsWith('PO-'));
+
+  let pending=pos.filter(p=>p.status==='Pending');
+  let approved=pos.filter(p=>p.status==='Approved');
+  let rejected=pos.filter(p=>p.status==='Rejected');
+
+  let daysList=approved.filter(p=>p.created_at&&p.approved_at).map(p=>(new Date(p.approved_at)-new Date(p.created_at))/86400000);
+  let avgDays=daysList.length?(daysList.reduce((a,b)=>a+b,0)/daysList.length):0;
+
+  let now=new Date();
+  let overdue=pending.map(p=>({...p,waitDays:p.created_at?Math.floor((now-new Date(p.created_at))/86400000):0}))
+    .filter(p=>p.waitDays>3).sort((a,b)=>b.waitDays-a.waitDays);
+
+  let statEl=document.getElementById('po-turn-stats');
+  if(statEl)statEl.innerHTML=`
+    <div class="stat-card" style="background:#faeeda;border-color:#854f0b">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value" style="color:#854f0b">${pending.length}</div>
+      <div class="stat-sub">PO requests</div>
+    </div>
+    <div class="stat-card" style="background:#eaf3de;border-color:#3b6d11">
+      <div class="stat-label">Approved</div>
+      <div class="stat-value" style="color:#3b6d11">${approved.length}</div>
+      <div class="stat-sub">PO requests</div>
+    </div>
+    <div class="stat-card" style="background:#fcebeb;border-color:#a32d2d">
+      <div class="stat-label">Rejected</div>
+      <div class="stat-value" style="color:#a32d2d">${rejected.length}</div>
+      <div class="stat-sub">PO requests</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb;border-color:#185fa5">
+      <div class="stat-label">ថ្ងៃមធ្យម → Approved</div>
+      <div class="stat-value" style="color:#185fa5">${avgDays.toFixed(1)}</div>
+      <div class="stat-sub">days</div>
+    </div>`;
+
+  let ovBody=document.getElementById('po-turn-overdue-body');
+  if(ovBody)ovBody.innerHTML=overdue.length?overdue.map(p=>{
+    let supplier=p.note&&p.note.includes('Supplier:')?p.note.split('Supplier:')[1].split('.')[0].trim():'-';
+    return`<tr>
+      <td style="font-weight:600;color:var(--blue)">${p.req_no}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(p.date)}</td>
+      <td style="font-size:12px">${p.requested_by_name||'-'}</td>
+      <td style="font-size:12px">${supplier}</td>
+      <td style="text-align:right;font-weight:700;color:#a32d2d">${p.waitDays}</td>
+      <td>${reqBadge(p.status)}</td>
+    </tr>`;
+  }).join('')
+    :'<tr><td colspan="6"><div class="empty">គ្មាន PO ណារង់ចាំលើសពី 3 ថ្ងៃ ✓</div></td></tr>';
+
+  // ===== Pending by Item (join request_items for all Pending POs) =====
+  let pibBody=document.getElementById('po-turn-pending-item-body');
+  if(pibBody){
+    if(!pending.length){
+      pibBody.innerHTML='<tr><td colspan="6"><div class="empty">គ្មាន Pending PO ទេ ✓</div></td></tr>';
+    } else {
+      let pendingIds=pending.map(p=>p.id);
+      let {data:pItems}=await db.from('request_items').select('*').in('request_id',pendingIds);
+      pItems=pItems||[];
+      let idsWithItems=new Set(pItems.map(pi=>pi.request_id));
+      pending.forEach(p=>{
+        if(!idsWithItems.has(p.id)&&p.item_code){
+          pItems.push({request_id:p.id,item_code:p.item_code,item_name:p.item_name,qty_requested:p.qty});
+        }
+      });
+      let byItem={};
+      pItems.forEach(pi=>{
+        let code=pi.item_code||'-';
+        if(!byItem[code])byItem[code]={name:pi.item_name||code,qty:0,poIds:new Set(),suppliers:new Set()};
+        byItem[code].qty+=(pi.qty_requested||0);
+        byItem[code].poIds.add(pi.request_id);
+        let ownerPO=pending.find(p=>p.id===pi.request_id);
+        if(ownerPO){
+          let sup=ownerPO.note&&ownerPO.note.includes('Supplier:')?ownerPO.note.split('Supplier:')[1].split('.')[0].trim():'';
+          if(sup)byItem[code].suppliers.add(sup);
+        }
+      });
+      let itemMapAll={};allItems.forEach(i=>{itemMapAll[i.code]=i});
+      let rows=Object.entries(byItem).map(([code,v])=>[code,{name:v.name,qty:v.qty,count:v.poIds.size,extra:[...v.suppliers].join(', ')}]).sort((a,b)=>b[1].qty-a[1].qty);
+      window._poPendingByItem=rows;window._poItemMapAll=itemMapAll;
+      renderPendingByItemRows(rows,itemMapAll,'po-turn-pending-item-body','po');
+    }
+  }
+
+  window._poTurnStats={pending:pending.length,approved:approved.length,rejected:rejected.length,avgDays};
+}
+
+function printPOTurnaround(){
+  let statsHTML=document.getElementById('po-turn-stats')?.innerHTML||'';
+  let ovHTML=document.getElementById('po-turn-overdue-body')?.innerHTML||'';
+  let itemMapAll=window._poItemMapAll||{};
+  let pibHTML=(window._poPendingByItem||[]).map(([code,v])=>`<tr>
+      <td>${code}</td><td>${v.name}</td><td>${itemMapAll[code]?.category||'-'}</td>
+      <td>${v.extra||'-'}</td><td style="text-align:right">${v.count}</td>
+      <td style="text-align:right;font-weight:700">${v.qty}</td>
+    </tr>`).join('')||'<tr><td colspan="6"><div class="empty">គ្មានទិន្នន័យ item</div></td></tr>';
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — PO Request Turnaround Report</h2>
+      <div class="sub">Printed by: <b>${CU.full_name||CU.username}</b> | Printed: ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+    <div class="stats">${statsHTML}</div>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#a32d2d">PO កំពុងរង់ចាំយូរជាង 3 ថ្ងៃ</div>
+    <table><thead><tr><th>PO No</th><th>Date</th><th>Requested By</th><th>Supplier</th><th>រង់ចាំ (ថ្ងៃ)</th><th>Status</th></tr></thead>
+    <tbody>${ovHTML}</tbody></table>
+    <div style="margin-top:14px;font-weight:700;font-size:12px;color:#0f6e56">Pending by Item (ទាំងអស់)</div>
+    <table><thead><tr><th>Item Code</th><th>Item Name</th><th>Category</th><th>Supplier</th><th># PO</th><th>Total Qty Pending</th></tr></thead>
+    <tbody>${pibHTML}</tbody></table>`);
+}
+
 async function loadPOList(){
+  loadPOTurnaround();
   let body=document.getElementById('po-list-body');
   if(!body)return;
   body.innerHTML='<tr><td colspan="8"><div class="empty">Loading...</div></td></tr>';
@@ -4618,6 +5982,7 @@ async function loadPOList(){
         <button class="btn btn-sm btn-primary" onclick="viewPODetail('${r.id}')" style="margin-right:4px"><i class="ti ti-eye"></i> View</button>
         ${r.status==='Pending'?`<button class="btn btn-sm btn-success" onclick="approvePO('${r.id}','${r.req_no}')"><i class="ti ti-check"></i> Approve</button>
         <button class="btn btn-sm btn-warning" onclick="rejectPO('${r.id}','${r.req_no}')" style="margin-left:4px"><i class="ti ti-x"></i> Reject</button>`:''}
+        ${r.status==='Approved'?`<button class="btn btn-sm btn-primary" onclick="openStockInFromPO('${r.id}','${r.req_no}')" style="margin-left:4px"><i class="ti ti-download"></i> Stock In</button>`:''}
         <button class="btn btn-sm btn-danger" onclick="deletePO('${r.id}','${r.req_no}')" style="margin-left:4px"><i class="ti ti-trash"></i></button>
       </td>
     </tr>`;
@@ -4770,6 +6135,196 @@ function printPODetail(){
 }
 
 // ===== APPROVE / REJECT / DELETE PO =====
+
+// ===== STOCK IN FROM PO =====
+async function openStockInFromPO(poId, poNo){
+  let {data:r}=await db.from('requests').select('*').eq('id',poId).single();
+  if(!r)return;
+  let {data:ritems}=await db.from('request_items').select('*').eq('request_id',poId);
+  ritems=ritems||[];
+  let today=new Date().toISOString().split('T')[0];
+
+  let rows=ritems.map((ri,idx)=>{
+    let master=allItems.find(a=>a.code===ri.item_code)||{};
+    return`<tr style="border-bottom:1px solid var(--border)" id="si-po-row-${idx}">
+      <td style="padding:6px 8px"><code style="background:#e8f0fb;padding:2px 6px;border-radius:4px;color:#185fa5;font-size:11px">${ri.item_code}</code></td>
+      <td style="padding:6px 8px;font-size:12px;font-weight:500;max-width:160px">${ri.item_name}</td>
+      <td style="padding:6px 6px;font-size:11px;color:var(--muted)">${master.unit||'-'}</td>
+      <td style="padding:6px 6px;font-size:11px;color:var(--muted)">${master.size||'-'}</td>
+      <td style="padding:6px 8px;text-align:center;font-weight:700;color:#185fa5">${ri.qty_requested}</td>
+      <td style="padding:6px 4px"><input id="si-po-ref-${idx}" placeholder="Ref..." style="width:80px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px"></td>
+      <td style="padding:6px 4px"><input id="si-po-lot-${idx}" placeholder="Lot..." style="width:90px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px"></td>
+      <td style="padding:6px 4px"><input id="si-po-datein-${idx}" type="date" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px"></td>
+      <td style="padding:6px 4px"><input id="si-po-exp-${idx}" type="date" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px"></td>
+      <td style="padding:6px 4px"><input id="si-po-qty-${idx}" type="number" value="${ri.qty_requested}" min="1" style="width:70px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right;font-weight:700;color:#185fa5"></td>
+      <td style="padding:6px 4px"><input id="si-po-rem-${idx}" placeholder="Remarks..." style="width:100px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px"></td>
+      <td style="padding:6px 8px;text-align:center"><input type="checkbox" id="si-po-chk-${idx}" checked style="width:16px;height:16px;cursor:pointer"></td>
+    </tr>`;
+  }).join('');
+
+  openModal(`<h3><i class="ti ti-download" style="color:var(--blue)"></i> Stock In from PO — <span style="color:var(--blue)">${poNo}</span></h3>
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px">
+    <i class="ti ti-info-circle" style="color:#16a34a"></i>
+    បំពេញ <b>Lot No</b>, <b>Expiry Date</b>, <b>Qty Received</b> — uncheck items ដែលមិនទាន់ទទួល
+  </div>
+  <div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin-bottom:12px">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#185fa5;color:#fff">
+        <th style="padding:8px;text-align:left;white-space:nowrap">Code</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Item Name</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Unit</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Size</th>
+        <th style="padding:8px;text-align:center;white-space:nowrap">Order Qty</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Ref.</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Lot No</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Date In</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Expiry Date</th>
+        <th style="padding:8px;text-align:right;white-space:nowrap;color:#90d4ff">Qty Received</th>
+        <th style="padding:8px;text-align:left;white-space:nowrap">Remarks</th>
+        <th style="padding:8px;text-align:center"><input type="checkbox" id="si-po-chk-all" checked onchange="toggleAllSIPO(this.checked)" style="width:16px;height:16px;cursor:pointer" title="Tick/Untick All"></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="submitStockInFromPO('${poId}','${poNo}',${ritems.length})">
+      <i class="ti ti-download"></i> Submit Stock In
+    </button>
+    <button class="btn" onclick="printPOBarcodes('${poId}','${poNo}',${ritems.length})" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
+      <i class="ti ti-barcode"></i> Print Barcodes
+    </button>
+  </div>`);
+}
+
+function toggleAllSIPO(checked){
+  var idx=0;
+  while(document.getElementById('si-po-chk-'+idx)){
+    document.getElementById('si-po-chk-'+idx).checked=checked;
+    idx++;
+  }
+}
+
+async function submitStockInFromPO(poId, poNo, count){
+  let btn=document.querySelector('.modal-footer .btn-primary');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Processing...';}
+  let today=new Date().toISOString().split('T')[0];
+  let {data:ritems}=await db.from('request_items').select('*').eq('request_id',poId);
+  ritems=ritems||[];
+  let errors=[];
+  let done=0;
+
+  for(let idx=0;idx<count;idx++){
+    let chk=document.getElementById('si-po-chk-'+idx);
+    if(!chk||!chk.checked)continue;
+    let ri=ritems[idx];
+    if(!ri)continue;
+    let ref=(document.getElementById('si-po-ref-'+idx)?.value||'').trim();
+    let lot=(document.getElementById('si-po-lot-'+idx)?.value||'').trim();
+    let datein=document.getElementById('si-po-datein-'+idx)?.value||today;
+    let exp=document.getElementById('si-po-exp-'+idx)?.value||null;
+    let qty=parseInt(document.getElementById('si-po-qty-'+idx)?.value||'0');
+    let rem=(document.getElementById('si-po-rem-'+idx)?.value||'').trim();
+    if(!qty||qty<1)continue;
+
+    // Stock in log
+    let {error:e1}=await db.from('stock_in_log').insert({
+      item_code:ri.item_code,
+      item_name:ri.item_name,
+      ref_no:ref||null,
+      lot_no:lot||null,
+      expiry_date:exp||null,
+      qty:qty,
+      date_in:datein,
+      source_ref:poNo,
+      remarks:rem||null,
+      added_by:CU.username||CU.full_name
+    });
+    if(e1){errors.push(ri.item_code+': '+e1.message);continue;}
+
+    // Update balance
+    let master=allItems.find(a=>a.code===ri.item_code);
+    let newBal=(master?master.balance||0:0)+qty;
+    let {error:e2}=await db.from('items').update({balance:newBal,stock_in:((master?.stock_in)||0)+qty,ref:ref||undefined,lot:lot||undefined,date_in:datein||undefined,expiry:exp||undefined}).eq('code',ri.item_code);
+    if(e2){errors.push(ri.item_code+': Balance update failed — '+e2.message);continue;}
+    await syncMonthlyStock(ri.item_code,ri.item_name,master?.category||'','in',qty);
+    done++;
+  }
+
+  if(errors.length){toast('Error: '+errors[0],'error');if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-download"></i> Submit Stock In';}return;}
+  
+  await loadMeta();
+  closeModal();
+  toast('✅ Stock In '+done+' items ពី '+poNo+' រួចហើយ!','success');
+  loadPOList();
+}
+
+async function printPOBarcodes(poId, poNo, count){
+  let {data:ritems}=await db.from('request_items').select('*').eq('request_id',poId);
+  ritems=ritems||[];
+  // Build print window with barcodes
+  let barcodeItems=[];
+  for(let idx=0;idx<count;idx++){
+    let chk=document.getElementById('si-po-chk-'+idx);
+    if(chk&&!chk.checked)continue;
+    let ri=ritems[idx];
+    if(!ri)continue;
+    let lot=document.getElementById('si-po-lot-'+idx)?.value||'';
+    let exp=document.getElementById('si-po-exp-'+idx)?.value||'';
+    let qty=document.getElementById('si-po-qty-'+idx)?.value||'1';
+    let datein=document.getElementById('si-po-datein-'+idx)?.value||'';
+    barcodeItems.push({code:ri.item_code,name:ri.item_name,lot,datein,exp,qty});
+  }
+  if(!barcodeItems.length){toast('គ្មាន item ជ្រើស!','error');return;}
+
+  let labels=barcodeItems.map(b=>`
+    <div class="label">
+      <div class="label-code">${b.code}</div>
+      <div class="label-name">${b.name}</div>
+      <svg class="barcode" data-code="${b.code}"></svg>
+      <div class="label-info">
+        <div><b>Item Code:</b> ${b.code}</div>
+        <div>${b.lot?'<b>Lot:</b> '+b.lot+' &nbsp;':''} ${b.datein?'<b>Date In:</b> '+b.datein:''} ${b.qty?'&nbsp; <b>Qty:</b> '+b.qty:''}</div>
+        <div class="label-used">Date Used: _______ / _______ / ___________</div>
+      </div>
+    </div>`).join('');
+
+  let win=window.open('','_blank','width=800,height=600');
+  win.document.write(`<!DOCTYPE html><html><head><title>Barcodes — ${poNo}</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    body{font-family:Arial,sans-serif;margin:10px;background:#fff}
+    .labels{display:flex;flex-wrap:wrap;gap:8px}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#fff}
+    .labels{display:flex;flex-wrap:wrap;gap:3mm}
+    .label{border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:25mm;height:25mm;text-align:center;page-break-inside:avoid;background:#fff;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
+    .label-code{font-size:7pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
+    .label-name{font-size:5pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:8mm}
+    .barcode{width:21mm;height:8mm}
+    .label-info{font-size:4.5pt;color:#444;text-align:left;line-height:1.5}
+    .label-used{border-top:0.5px dashed #bbb;padding-top:0.5mm;font-size:4pt;color:#555}
+    @media print{
+      body{margin:0}
+      .no-print{display:none}
+      .labels{gap:2mm}
+      .label{border:0.5px solid #999}
+    }
+    @media print{body{margin:0}.no-print{display:none}}
+  </style></head><body>
+  <div class="no-print" style="margin-bottom:10px">
+    <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
+    <span style="margin-left:10px;font-size:13px;color:#666">PO: ${poNo} — ${barcodeItems.length} labels</span>
+  </div>
+  <div class="labels">${labels}</div>
+  <script>
+    document.querySelectorAll('.barcode').forEach(function(el){
+      try{JsBarcode(el,el.getAttribute('data-code'),{format:'CODE128',width:1.5,height:40,displayValue:false,margin:2});}catch(e){}
+    });
+  <\/script></body></html>`);
+  win.document.close();
+}
+
 async function approvePO(id,poNo){
   if(!confirm('Approve PO '+poNo+'?'))return;
   await db.from('requests').update({status:'Approved',approved_by:CU.id,approved_by_name:CU.full_name||CU.username,approved_at:new Date().toISOString()}).eq('id',id);
@@ -5353,6 +6908,77 @@ function exportCSV(){
 
 // ===== USER MANAGEMENT =====
 
+
+// ===== COLUMN HEADER EDITOR =====
+async function loadColHeaders(){
+  var {data}=await db.from('app_settings').select('*').eq('type','col_header');
+  if(data&&data.length){
+    data.forEach(d=>{
+      if(COL_HEADERS.hasOwnProperty(d.value.split(':')[0])){
+        var parts=d.value.split(':');
+        COL_HEADERS[parts[0]]=parts.slice(1).join(':');
+      }
+    });
+  }
+}
+
+function openColHeaderEditor(){
+  var rows=COL_KEYS.map(k=>`
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 10px;font-size:12px;color:var(--muted);white-space:nowrap">${k}</td>
+      <td style="padding:6px 8px"><input id="ch-${k}" value="${COL_HEADERS[k]}" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px"></td>
+    </tr>`).join('');
+  openModal(`<h3><i class="ti ti-columns" style="color:var(--blue)"></i> Column Header Editor</h3>
+  <div style="overflow-y:auto;max-height:420px;border:1px solid var(--border);border-radius:10px;margin-bottom:12px">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:#185fa5;color:#fff;position:sticky;top:0">
+        <th style="padding:8px 10px;text-align:left;font-size:12px;width:160px">Field Key</th>
+        <th style="padding:8px 10px;text-align:left;font-size:12px">Column Name</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div class="modal-footer">
+    <button class="btn" onclick="resetColHeaders()">↺ Reset Default</button>
+    <button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveColHeaders()"><i class="ti ti-device-floppy"></i> Save</button>
+  </div>`);
+}
+
+async function saveColHeaders(){
+  var btn=document.querySelector('.modal-footer .btn-primary');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Saving...';}
+  // Delete old col_header settings
+  await db.from('app_settings').delete().eq('type','col_header');
+  // Insert new ones
+  var inserts=COL_KEYS.map(k=>{
+    var val=(document.getElementById('ch-'+k)?.value||COL_HEADERS[k]).trim();
+    COL_HEADERS[k]=val;
+    return{type:'col_header',value:k+':'+val};
+  });
+  var {error}=await db.from('app_settings').insert(inserts);
+  if(error){toast('Error: '+error.message,'error');if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-device-floppy"></i> Save';}return;}
+  toast('✅ Column headers saved!','success');
+  closeModal();
+  loadInventory();
+}
+
+async function resetColHeaders(){
+  var defaults={
+    item_code:'Item Code',item_name:'Item Name',category:'Category',
+    ref:'Ref.',lot_no:'Lot No',date_in:'Date In',expiry_date:'Expiry Date',days:'Days',
+    brand:'Brand',supplier:'Supplier',source:'Source',unit:'Unit',size:'Size',
+    unit_price:'Unit Price',opening:'Opening',stock_in:'Stock In',stock_out:'Stock Out',
+    adj:'Adj.',balance:'Balance',min:'Min',stock_value:'Stock Value',
+    status:'Status',expiry_alert:'Expiry Alert',storage_condition:'Storage Condition',
+    storage_area:'Storage Area',iso_clause:'ISO Clause',remarks:'Remarks'
+  };
+  COL_KEYS.forEach(k=>{
+    var inp=document.getElementById('ch-'+k);
+    if(inp)inp.value=defaults[k];
+  });
+}
+
 // ===== LIST MANAGEMENT =====
 var _listCache={};
 
@@ -5361,8 +6987,85 @@ var LIST_CONFIG={
   storage_condition:{label:'Storage Condition',icon:'ti-temperature',color:'var(--orange)',table:'app_settings',key:'storage_condition'},
   supplier:{label:'Supplier',icon:'ti-truck',color:'var(--green)',table:'app_settings',key:'supplier'},
   source:{label:'Source',icon:'ti-tag',color:'var(--red)',table:'app_settings',key:'source'},
-  brand:{label:'Brand',icon:'ti-certificate',color:'#7c3aed',table:'app_settings',key:'brand'}
+  brand:{label:'Brand',icon:'ti-certificate',color:'#7c3aed',table:'app_settings',key:'brand'},
+  category:{label:'Category',icon:'ti-category',color:'#0891b2',table:'app_settings',key:'category'},
+  supply_type:{label:'Supply Type',icon:'ti-truck-delivery',color:'#059669',table:'app_settings',key:'supply_type'},
+  item_status:{label:'Status',icon:'ti-circle-check',color:'#dc2626',table:'app_settings',key:'item_status'},
+  shelf:{label:'Shelf',icon:'ti-layout-rows',color:'#7c3aed',table:'app_settings',key:'shelf'}
 };
+
+
+
+// Sync Stock In/Out to monthly_stock table
+async function syncMonthlyStock(itemCode, itemName, category, type, qty){
+  var now=new Date();
+  var month=now.getMonth()+1;
+  var year=now.getFullYear();
+  // Check if month is locked
+  var lockKey=year+'_'+month;
+  if(_lockedMonths[lockKey]){console.warn('Month '+month+' '+year+' is locked — skipping sync');return;}
+  // Get-or-create the row ATOMICALLY (upsert) to avoid duplicate rows from concurrent calls
+  // (requires a UNIQUE constraint on monthly_stock(item_code,year,month) in Supabase)
+  var pm=month===1?12:month-1;
+  var py=month===1?year-1:year;
+  var {data:prev}=await db.from('monthly_stock').select('closing').eq('item_code',itemCode).eq('year',py).eq('month',pm).order('id',{ascending:false}).limit(1).maybeSingle();
+  var opening=prev?(prev.closing||0):0;
+  var {data:row,error:upErr}=await db.from('monthly_stock').upsert({
+    item_code:itemCode,item_name:itemName,category:category||'',
+    year,month,opening,stock_in:0,stock_out:0,adjustment:0,closing:opening
+  },{onConflict:'item_code,year,month',ignoreDuplicates:true}).select().single();
+  if(upErr||!row){
+    // Row already existed — fetch it (most recent if any leftover duplicates)
+    var {data:existRow}=await db.from('monthly_stock').select('*').eq('item_code',itemCode).eq('year',year).eq('month',month).order('id',{ascending:false}).limit(1).maybeSingle();
+    row=existRow;
+  }
+  if(!row){console.error('[syncMonthlyStock] Could not get/create row for',itemCode);return;}
+  // Update stock in/out
+  var updates={};
+  if(type==='in'){
+    updates.stock_in=(row.stock_in||0)+qty;
+  } else if(type==='out'){
+    updates.stock_out=(row.stock_out||0)+qty;
+  } else if(type==='adj'){
+    updates.adjustment=(row.adjustment||0)+qty;
+  }
+  // Recalc: Balance = Opening + Stock In - Stock Out ± Adj (same as Excel)
+  var newStockIn=updates.stock_in!==undefined?updates.stock_in:(row.stock_in||0);
+  var newStockOut=updates.stock_out!==undefined?updates.stock_out:(row.stock_out||0);
+  var newAdj=updates.adjustment!==undefined?updates.adjustment:(row.adjustment||0);
+  updates.closing=(row.opening||0)+newStockIn-newStockOut+newAdj;
+  await db.from('monthly_stock').update(updates).eq('id',row.id);
+}
+
+async function getMonthlyData(month, year){
+  var {data}=await db.from('monthly_stock').select('*').eq('year',year).eq('month',month).order('id',{ascending:true});
+  var map={};
+  // If legacy duplicate rows exist for the same item, keep whichever has the most activity
+  (data||[]).forEach(r=>{
+    var prevR=map[r.item_code];
+    if(!prevR||((r.stock_in||0)+(r.stock_out||0)+Math.abs(r.adjustment||0))>=((prevR.stock_in||0)+(prevR.stock_out||0)+Math.abs(prevR.adjustment||0)))map[r.item_code]=r;
+  });
+  return map;
+}
+
+async function ensureMonthlyRow(itemCode, itemName, category, month, year){
+  var lockKey=year+'_'+month;
+  if(_lockedMonths[lockKey]){return null;}
+  var {data:existing}=await db.from('monthly_stock').select('*').eq('item_code',itemCode).eq('year',year).eq('month',month).order('id',{ascending:false}).limit(1).maybeSingle();
+  if(existing)return existing;
+  var pm=month===1?12:month-1,py=month===1?year-1:year;
+  var {data:prev}=await db.from('monthly_stock').select('closing').eq('item_code',itemCode).eq('year',py).eq('month',pm).order('id',{ascending:false}).limit(1).maybeSingle();
+  var opening=0;
+  if(prev){opening=prev.closing||0;}
+  else{var {data:mi}=await db.from('items').select('balance').eq('code',itemCode).single();opening=mi?(mi.balance||0):0;}
+  var {data:newRow}=await db.from('monthly_stock').upsert({
+    item_code:itemCode,item_name:itemName,category:category||'',
+    year,month,opening,stock_in:0,stock_out:0,adjustment:0,closing:opening
+  },{onConflict:'item_code,year,month',ignoreDuplicates:true}).select().single();
+  if(newRow)return newRow;
+  var {data:fallback}=await db.from('monthly_stock').select('*').eq('item_code',itemCode).eq('year',year).eq('month',month).order('id',{ascending:false}).limit(1).maybeSingle();
+  return fallback;
+}
 
 async function loadListMgmt(){
   var types=Object.keys(LIST_CONFIG);
@@ -5383,6 +7086,10 @@ async function getListItems(type){
   if(type==='storage_condition')DYN_STORAGE=(data||[]).map(d=>d.value);
   if(type==='supplier')DYN_SUPPLIERS=(data||[]).map(d=>d.value);
   if(type==='brand')DYN_BRANDS=(data||[]).map(d=>d.value);
+  if(type==='supply_type')DYN_SUPPLY_TYPES=(data||[]).map(d=>d.value);
+  if(type==='item_status')DYN_STATUSES=(data||[]).map(d=>d.value);
+  if(type==='shelf')DYN_SHELVES=(data||[]).map(d=>d.value);
+  if(type==='category'&&data&&data.length){DYN_CATS=data.map(d=>d.value);CATS.length=0;DYN_CATS.forEach(c=>CATS.push(c));}
   return data||[];
 }
 
@@ -5463,6 +7170,7 @@ refreshDynLists=function(){
   if(_listCache.storage_condition&&_listCache.storage_condition.length)DYN_STORAGE=[..._listCache.storage_condition.map(d=>d.value)];
   if(_listCache.supplier&&_listCache.supplier.length)DYN_SUPPLIERS=[..._listCache.supplier.map(d=>d.value)];
   if(_listCache.brand&&_listCache.brand.length)DYN_BRANDS=[..._listCache.brand.map(d=>d.value)];
+  if(_listCache.category&&_listCache.category.length){DYN_CATS=_listCache.category.map(d=>d.value);CATS.length=0;DYN_CATS.forEach(c=>CATS.push(c));}
 };
 
 // Load DB lists on startup after meta loads
@@ -5471,6 +7179,10 @@ populateSelects=async function(){
   _origPopulateSelects();
   // Pre-load lists from DB
   await Promise.all(Object.keys(LIST_CONFIG).map(t=>getListItems(t)));
+  // Load column headers from DB
+  await loadColHeaders();
+  // Sync CATS from DB if available
+  if(_listCache.category&&_listCache.category.length){DYN_CATS=_listCache.category.map(d=>d.value);CATS.length=0;DYN_CATS.forEach(c=>CATS.push(c));}
   rebuildScanSupDropdown&&rebuildScanSupDropdown();
 };
 
