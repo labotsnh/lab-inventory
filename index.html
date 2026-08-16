@@ -221,6 +221,32 @@ td{font-size:13px}
 .vis-grid{overflow:auto}
 .vis-check{width:20px;height:20px;cursor:pointer;accent-color:var(--blue)}
 /* PRINT */
+/* ===== MOBILE / TABLET RESPONSIVE (main app) ===== */
+.mobile-menu-btn{display:none}
+.mobile-backdrop{display:none}
+@media (max-width:820px){
+  .mobile-menu-btn{display:flex;align-items:center;justify-content:center;position:fixed;top:12px;left:12px;z-index:120;width:38px;height:38px;border-radius:10px;background:var(--navy);color:#fff;border:none;box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;font-size:18px}
+  .app{position:relative}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:150;width:240px;min-width:240px;transform:translateX(-100%);transition:transform .25s ease;box-shadow:2px 0 16px rgba(0,0,0,.2)}
+  .sidebar.mobile-open{transform:translateX(0)}
+  .mobile-backdrop.show{display:block;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:140}
+  .main{width:100%;padding:56px 14px 16px}
+  .stats-grid{grid-template-columns:repeat(2,1fr);gap:8px}
+  .form-grid{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
+  .page-header{flex-wrap:wrap;gap:10px}
+  .page-header h2{font-size:17px}
+  .search-bar{flex-direction:column;align-items:stretch}
+  .search-bar select,.search-bar input{width:100%}
+  .modal{padding:16px;width:min(94vw,960px)}
+  table{font-size:12px}
+  th,td{padding:6px 8px!important}
+}
+@media (max-width:480px){
+  .stats-grid{grid-template-columns:1fr}
+  .login-split{margin:0;border-radius:0;min-height:100vh}
+}
+
 @media print{
   body > *{display:none!important}
   #print-frame{display:block!important;position:fixed;top:0;left:0;width:100%;height:100%;border:none}
@@ -485,6 +511,8 @@ function printMyRequests(){
 
 <!-- MAIN APP -->
 <div id="main-app" class="app" style="display:none">
+<button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleMobileSidebar()"><i class="ti ti-menu-2"></i></button>
+<div class="mobile-backdrop" id="mobile-backdrop" onclick="closeMobileSidebar()"></div>
 <div class="sidebar">
   <div class="profile-top" onclick="openEditProfile()">
     <div class="profile-top-stripe"></div>
@@ -1115,6 +1143,96 @@ function printMyRequests(){
   </div>
 </div>
 
+<!-- ===== PCS WITHDRAW (Opened Pack Tracker) ===== -->
+<div class="page" id="page-pcs-withdraw">
+  <div class="page-header">
+    <h2><i class="ti ti-box-multiple" style="color:#b7791f"></i> PCS Withdraw</h2>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="font-size:12px;color:var(--muted)">ដកប្រើម្តងមួយៗ (Cart/Test/Strip) ពី Pack ដែលកំពុងបើក</div>
+      <button class="btn btn-sm" onclick="togglePcsSetup()"><i class="ti ti-settings"></i> កំណត់ Item</button>
+    </div>
+  </div>
+
+  <div class="card" id="pcs-setup-card" style="display:none;background:var(--peach);border-color:#f6ddb8">
+    <h3 style="margin-top:0"><i class="ti ti-settings" style="color:#b7791f"></i> កំណត់ Item សម្រាប់ PCS Withdraw</h3>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">កំណត់ Item ណាមួយឱ្យអាចដកប្រើជា PCS បាន — ដាក់ចំនួន PCS ក្នុង 1 Pack និងឈ្មោះ Unit (ឧ. Creatine kit = 10 cart)</div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1;position:relative">
+        <label>ជ្រើសរើស Item *</label>
+        <input type="text" id="pcs-setup-search" placeholder="ស្វែងរក Item (Code ឬ ឈ្មោះ)..." autocomplete="off"
+          oninput="pcsSetupSearch(this.value)" onfocus="pcsSetupSearch(this.value)">
+        <input type="hidden" id="pcs-setup-item-code">
+        <div id="pcs-setup-drop" style="display:none;position:absolute;z-index:50;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:320px;overflow:auto;margin-top:4px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="position:sticky;top:0;background:#e8f0fb;color:#185fa5">
+              <th style="padding:6px 8px;text-align:left">Item Code</th><th style="padding:6px 8px;text-align:left">Item Name</th>
+              <th style="padding:6px 8px;text-align:left">Category</th><th style="padding:6px 8px;text-align:left">Lot No</th>
+              <th style="padding:6px 8px;text-align:left">Expiry</th><th style="padding:6px 8px;text-align:left">Unit</th>
+              <th style="padding:6px 8px;text-align:left">Size</th>
+            </tr></thead>
+            <tbody id="pcs-setup-drop-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="form-group"><label>PCS ក្នុង 1 Pack</label><input id="pcs-setup-units" type="number" min="0" placeholder="ឧ. 10"></div>
+      <div class="form-group"><label>ឈ្មោះ PCS Unit</label><input id="pcs-setup-label" placeholder="ឧ. cart, test, strip"></div>
+    </div>
+    <button class="btn btn-primary" onclick="savePcsSetup()"><i class="ti ti-check"></i> រក្សាទុក</button>
+    <div style="font-size:13px;font-weight:600;color:var(--muted);margin:16px 0 8px">Item ដែលកំណត់រួច</div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Item Code</th><th>Item Name</th><th style="text-align:right">PCS/Pack</th><th>Unit Label</th><th></th></tr></thead>
+      <tbody id="pcs-setup-body"></tbody></table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">ដកប្រើ PCS — លឿន! ចុចតែម្តង</h3>
+    <input type="text" id="pcs-quick-search" placeholder="🔍 ស្វែងរក Item (ឧ. glu, creat...)" autocomplete="off"
+      oninput="filterPcsQuickGrid(this.value)" style="margin-bottom:10px;max-width:320px">
+    <div id="pcs-quick-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:14px"></div>
+
+    <div id="pcs-selected-bar" style="display:none;align-items:center;justify-content:space-between;background:#e8f0fb;border:1px solid #b8d4f0;border-radius:10px;padding:10px 14px;margin-bottom:10px">
+      <div><b id="pcs-selected-name" style="color:#185fa5"></b></div>
+      <button class="btn btn-sm" onclick="pcsClearSelection()"><i class="ti ti-x"></i> ប្តូរ Item</button>
+    </div>
+    <select id="pcs-item-sel" onchange="onPcsItemChange()" style="display:none"><option value="">-- ជ្រើសរើស Item --</option></select>
+
+    <div id="pcs-open-pack-info" style="display:none;background:var(--mint);border:1px solid #cdeadf;border-radius:10px;padding:12px 14px;margin:10px 0;font-size:13px"></div>
+
+    <div id="pcs-qty-section" style="display:none">
+      <label style="font-size:13px;color:var(--muted);display:block;margin-bottom:6px">ចំនួន PCS ត្រូវការដក *</label>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <button class="btn" onclick="pcsQtyStep(-1)" style="font-size:18px;padding:8px 16px">−</button>
+        <input id="pcs-qty" type="number" min="1" value="1" onkeydown="if(event.key==='Enter')submitPcsWithdraw()" style="width:80px;text-align:center;font-size:18px;font-weight:700">
+        <button class="btn" onclick="pcsQtyStep(1)" style="font-size:18px;padding:8px 16px">+</button>
+        <div style="display:flex;gap:6px;margin-left:8px">
+          <button class="btn btn-sm" onclick="pcsQtySet(1)">1</button>
+          <button class="btn btn-sm" onclick="pcsQtySet(2)">2</button>
+          <button class="btn btn-sm" onclick="pcsQtySet(5)">5</button>
+          <button class="btn btn-sm" onclick="pcsQtySet(10)">10</button>
+        </div>
+      </div>
+      <div class="form-group" id="pcs-new-lot-wrap" style="display:none;max-width:280px">
+        <label>Lot No (ត្រូវការ ព្រោះនឹងបើក Pack ថ្មី)</label>
+        <input id="pcs-new-lot" placeholder="Lot No...">
+      </div>
+      <button class="btn btn-primary" onclick="submitPcsWithdraw()" style="margin-top:6px;padding:12px 28px;font-size:15px"><i class="ti ti-check"></i> ដកប្រើ (Withdraw)</button>
+    </div>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:18px 0 8px"><i class="ti ti-package" style="color:#b7791f"></i> Pack កំពុងបើក (Currently Open)</div>
+  <div class="tbl-wrap">
+    <table><thead><tr>
+      <th>Item Code</th><th>Item Name</th><th>Lot</th>
+      <th style="text-align:right">Total PCS</th><th style="text-align:right">សល់ (Remaining)</th>
+      <th>បើកដោយ</th><th>ថ្ងៃបើក</th>
+
+    </tr></thead>
+    <tbody id="pcs-open-body"><tr><td colspan="7"><div class="empty">Loading...</div></td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ===== ALERTS ===== -->
 <div class="page" id="page-alerts">
   <div class="page-header">
@@ -1638,10 +1756,18 @@ async function doLogin(){
   if(!data){showLoginErr('រកមិនឃើញ Username: '+u);return}
   // Step 2: check password client-side
   if(data.password_hash!==p){showLoginErr('Password មិនត្រឹមត្រូវ!');return}
-  // Remember Me: store/clear the username locally (never store password)
+  // Remember Me: store/clear username + password locally.
+  // NOTE: base64 is obfuscation only, NOT encryption — anyone with access to this
+  // browser profile (devtools/localStorage) can decode it. Fine for a shared trusted
+  // device, but staff should still avoid this on public/shared computers.
   try{
-    if(document.getElementById('chk-remember')?.checked)localStorage.setItem('tsnhl_remember_user',u);
-    else localStorage.removeItem('tsnhl_remember_user');
+    if(document.getElementById('chk-remember')?.checked){
+      localStorage.setItem('tsnhl_remember_user',u);
+      localStorage.setItem('tsnhl_remember_pass',btoa(unescape(encodeURIComponent(p))));
+    } else {
+      localStorage.removeItem('tsnhl_remember_user');
+      localStorage.removeItem('tsnhl_remember_pass');
+    }
   }catch(e){}
   CU=data;
   document.getElementById('login-page').style.display='none';
@@ -1667,19 +1793,25 @@ function showForgotPwHint(){
   toast('សូមទាក់ទង Admin ដើម្បីកំណត់ Password ថ្មី — ប្រព័ន្ធនេះមិនទាន់មាន self-service reset','info');
 }
 
-(function prefillRememberedUser(){
+function prefillRememberedUser(){
   try{
     let u=localStorage.getItem('tsnhl_remember_user');
+    let pEnc=localStorage.getItem('tsnhl_remember_pass');
+    let inp=document.getElementById('inp-user');
+    let passInp=document.getElementById('inp-pass');
+    let chk=document.getElementById('chk-remember');
     if(u){
-      let inp=document.getElementById('inp-user');
-      let chk=document.getElementById('chk-remember');
       if(inp)inp.value=u;
       if(chk)chk.checked=true;
+      if(pEnc&&passInp){
+        try{passInp.value=decodeURIComponent(escape(atob(pEnc)));}catch(e){}
+      }
     }
   }catch(e){}
-})();
+}
+prefillRememberedUser();
 function showLoginErr(msg){let e=document.getElementById('login-err');e.textContent=msg;e.style.display='block';setTimeout(()=>e.style.display='none',3000)}
-function doLogout(){CU=null;batchItems=[];document.getElementById('main-app').style.display='none';document.getElementById('login-page').style.display='flex';document.getElementById('inp-user').value='';document.getElementById('inp-pass').value=''}
+function doLogout(){CU=null;batchItems=[];document.getElementById('main-app').style.display='none';document.getElementById('login-page').style.display='flex';document.getElementById('inp-user').value='';document.getElementById('inp-pass').value='';prefillRememberedUser()}
 
 // ===== USER PROFILE (avatar + bio) =====
 function renderUserAvatar(){
@@ -1926,14 +2058,25 @@ function setupNav(){
       <div class="nav-item" data-page="my-stockout"><i class="ti ti-arrow-bar-up" style="color:#a32d2d"></i> Stock Out</div>
       <div class="nav-item" data-page="my-usage"><i class="ti ti-chart-histogram" style="color:#0f6e56"></i> My Usage Summary</div>
       <div class="nav-item" data-page="my-turnaround"><i class="ti ti-clock-hour-4" style="color:#185fa5"></i> Request Turnaround</div>
-      <div class="nav-item" data-page="my-expiry"><i class="ti ti-calendar-exclamation" style="color:#a32d2d"></i> Expiry Alert</div>`;
+      <div class="nav-item" data-page="my-expiry"><i class="ti ti-calendar-exclamation" style="color:#a32d2d"></i> Expiry Alert</div>
+      <div class="nav-item" data-page="pcs-withdraw"><i class="ti ti-box-multiple" style="color:#b7791f"></i> PCS Withdraw</div>`;
   }
   document.querySelectorAll('.nav-item[data-page]').forEach(el=>{
     el.addEventListener('click',()=>goPage(el.dataset.page));
   });
   if(CU.role==='admin') updateBadges();
 }
+function toggleMobileSidebar(){
+  document.querySelector('.sidebar')?.classList.toggle('mobile-open');
+  document.getElementById('mobile-backdrop')?.classList.toggle('show');
+}
+function closeMobileSidebar(){
+  document.querySelector('.sidebar')?.classList.remove('mobile-open');
+  document.getElementById('mobile-backdrop')?.classList.remove('show');
+}
+
 function goPage(p){
+  closeMobileSidebar();
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   let nav=document.querySelector(`.nav-item[data-page="${p}"]`);
   if(nav)nav.classList.add('active');
@@ -1954,6 +2097,7 @@ function goPage(p){
   else if(p==='my-usage')loadMyUsageSummary();
   else if(p==='my-turnaround')loadMyTurnaround();
   else if(p==='my-expiry')loadMyExpiryAlert();
+  else if(p==='pcs-withdraw')loadPcsWithdraw();
   else if(p==='alerts')loadAlerts();
   else if(p==='nonconforming')loadNonConforming();
   else if(p==='report')loadReport();
@@ -3171,7 +3315,7 @@ async function submitBatchStockIn(){
     await db.from('stock_in_log').insert({
       date:dateStr,order_code:b.ocode,item_code:b.code,item_name:b.name,
       lot:b.lot,unit:item.unit,size:item.size,qty:b.qty,
-      expiry:b.exp||null,supplier:b.supplier,source:b.source,created_by:CU.id,
+      expiry:b.exp||null,supplier:b.supplier,source:b.source,created_by:CU.id,created_by_name:CU.full_name||CU.username,
       condition_ok:b.conditionOk!==false,lot_verified:b.lotVerified||false,
       temperature:b.temperature||null,observation:b.observation||null
     });
@@ -3398,7 +3542,8 @@ async function submitLotStockOut(){
     department:dept,
     ward,
     code_order:cord,
-    created_by:CU.id
+    created_by:CU.id,
+    created_by_name:CU.full_name||CU.username
   });
 
   window._soItem=null;
@@ -3438,7 +3583,7 @@ async function submitManualStockOut(){
     lot:item.lot,item_ref:item.ref||'',
     unit:item.unit,size:item.size,qty,
     expiry:item.expiry,item_expiry:item.expiry,
-    source:item.source,department:dept,ward,code_order:cord,created_by:CU.id
+    source:item.source,department:dept,ward,code_order:cord,created_by:CU.id,created_by_name:CU.full_name||CU.username
   });
   document.getElementById('so-form').style.display='none';
   document.getElementById('bc-out').value='';
@@ -4360,7 +4505,7 @@ async function approveReqWithItems(reqId, itemCount){
     // Update request_item
     if(riId&&riId!=='legacy')await db.from('request_items').update({qty_given:qtyGiven,status:'Approved',item_lot:lotNo,item_ref:lotRef,item_expiry:lotExpiry||null}).eq('id',riId);
     // Insert stock_out_log with full traceability
-    await db.from('stock_out_log').insert({date:dateStr,item_code:code,item_name:item?.name||code,lot:lotNo,item_ref:lotRef||item?.ref||'',unit:item?.unit||'',size:item?.size||'',qty:qtyGiven,expiry:item?.expiry,item_expiry:lotExpiry||null,source:lotSource||item?.source||'',department:req?.department||'',ward:req?.ward||'',request_id:reqId,created_by:CU.id});
+    await db.from('stock_out_log').insert({date:dateStr,item_code:code,item_name:item?.name||code,lot:lotNo,item_ref:lotRef||item?.ref||'',unit:item?.unit||'',size:item?.size||'',qty:qtyGiven,expiry:item?.expiry,item_expiry:lotExpiry||null,source:lotSource||item?.source||'',department:req?.department||'',ward:req?.ward||'',request_id:reqId,created_by:CU.id,created_by_name:CU.full_name||CU.username});
   }
   if(errors.length){toast('Stock មិនគ្រប់: '+errors.join(', '),'error');return}
   await db.from('requests').update({status:'Approved',approved_by:CU.id,approved_at:new Date().toISOString()}).eq('id',reqId);
@@ -5448,6 +5593,316 @@ function printMyExpiry(){
       <th>Expiry Date</th><th>ថ្ងៃនៅសល់</th><th>Balance</th><th>Unit</th>
     </tr></thead>
     <tbody>${bodyHTML}</tbody></table>`);
+}
+
+// ===== PCS WITHDRAW (Opened Pack Tracker) =====
+async function loadPcsWithdraw(){
+  let dept=CU.department||CU.ward||'';
+  let sel=document.getElementById('pcs-item-sel');
+  if(sel){
+    let items=allItems.filter(i=>i.units_per_pack&&i.units_per_pack>0);
+    let visCats=window._myVisCats||[],visItems=window._myVisItems||[];
+    let hasVis=visCats.length>0||visItems.length>0;
+    if(hasVis)items=items.filter(i=>visCats.includes(i.category)||visItems.includes(i.code));
+    else if(dept)items=items.filter(i=>i.category===dept||i.category==='Consumables');
+    let cur=sel.value;
+    sel.innerHTML='<option value="">-- ជ្រើសរើស Item --</option>'+items.map(i=>`<option value="${i.code}">${i.code} — ${i.name} (${i.units_per_pack} ${i.pcs_unit_label||'pcs'}/${i.unit||'kit'})</option>`).join('');
+    if(cur)sel.value=cur;
+  }
+  populatePcsSetupSelect();
+  renderPcsSetupList();
+  await renderOpenPacksTable();
+  renderPcsQuickGrid();
+  onPcsItemChange();
+}
+
+function renderPcsQuickGrid(){
+  let grid=document.getElementById('pcs-quick-grid');
+  if(!grid)return;
+  let items=getPcsScopedItems().filter(i=>i.units_per_pack&&i.units_per_pack>0);
+  window._pcsQuickItems=items;
+  let searchBox=document.getElementById('pcs-quick-search');
+  if(searchBox)searchBox.style.display=items.length?'block':'none';
+  if(!items.length){grid.innerHTML='<div class="empty" style="grid-column:1/-1">មិនទាន់មាន Item កំណត់សម្រាប់ PCS ទេ — ចុច "កំណត់ Item" ខាងលើដើម្បីបន្ថែម</div>';return;}
+  drawPcsQuickTiles(items);
+}
+
+function drawPcsQuickTiles(items){
+  let grid=document.getElementById('pcs-quick-grid');
+  if(!grid)return;
+  if(!items.length){grid.innerHTML='<div class="empty" style="grid-column:1/-1">រកមិនឃើញ Item ត្រូវនឹងការស្វែងរក</div>';return;}
+  grid.innerHTML=items.map(i=>{
+    let pack=(window._openPacks||[]).find(p=>p.item_code===i.code);
+    let statusText=pack?`សល់ ${pack.remaining_pcs}/${pack.total_pcs}`:'មិនទាន់បើក';
+    let statusColor=pack?(pack.remaining_pcs<=Math.ceil(pack.total_pcs*0.2)?'#a32d2d':'#3b6d11'):'#888';
+    return`<button onclick="pcsSelectItemForWithdraw('${i.code}')" style="text-align:left;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--card);cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:600;font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${i.code}</div>
+      <div style="font-size:11px;font-weight:600;color:${statusColor};margin-top:4px">${statusText} ${i.pcs_unit_label||'pcs'}</div>
+    </button>`;
+  }).join('');
+}
+
+function filterPcsQuickGrid(q){
+  let items=window._pcsQuickItems||[];
+  let kw=(q||'').trim().toLowerCase();
+  let filtered=kw?items.filter(i=>(i.code+i.name).toLowerCase().includes(kw)):items;
+  drawPcsQuickTiles(filtered);
+}
+
+function pcsSelectItemForWithdraw(code){
+  let sel=document.getElementById('pcs-item-sel');
+  if(sel)sel.value=code;
+  let item=allItems.find(i=>i.code===code);
+  document.getElementById('pcs-selected-bar').style.display='flex';
+  document.getElementById('pcs-selected-name').textContent=`${item?.name||code} (${code})`;
+  document.getElementById('pcs-quick-grid').style.display='none';
+  let sb=document.getElementById('pcs-quick-search');if(sb)sb.style.display='none';
+  document.getElementById('pcs-qty-section').style.display='block';
+  onPcsItemChange();
+  document.getElementById('pcs-qty').value=1;
+  setTimeout(()=>{let q=document.getElementById('pcs-qty');if(q){q.focus();q.select();}},50);
+}
+
+function pcsClearSelection(){
+  document.getElementById('pcs-item-sel').value='';
+  document.getElementById('pcs-selected-bar').style.display='none';
+  document.getElementById('pcs-quick-grid').style.display='grid';
+  document.getElementById('pcs-qty-section').style.display='none';
+  document.getElementById('pcs-open-pack-info').style.display='none';
+  let sb=document.getElementById('pcs-quick-search');
+  if(sb){sb.style.display='block';sb.value='';filterPcsQuickGrid('');setTimeout(()=>sb.focus(),50);}
+}
+
+function pcsQtyStep(delta){
+  let inp=document.getElementById('pcs-qty');
+  if(!inp)return;
+  let v=Math.max(1,(parseInt(inp.value)||1)+delta);
+  inp.value=v;
+}
+function pcsQtySet(v){
+  let inp=document.getElementById('pcs-qty');
+  if(inp)inp.value=v;
+}
+
+function togglePcsSetup(){
+  let card=document.getElementById('pcs-setup-card');
+  if(!card)return;
+  card.style.display=card.style.display==='none'?'block':'none';
+}
+
+function getPcsScopedItems(){
+  let dept=CU.department||CU.ward||'';
+  let items=allItems.slice();
+  let visCats=window._myVisCats||[],visItems=window._myVisItems||[];
+  let hasVis=visCats.length>0||visItems.length>0;
+  if(hasVis)items=items.filter(i=>visCats.includes(i.category)||visItems.includes(i.code));
+  else if(dept)items=items.filter(i=>i.category===dept||i.category==='Consumables');
+  return items;
+}
+
+function populatePcsSetupSelect(){
+  // Reset the search box/hidden code when the page (re)loads
+  let search=document.getElementById('pcs-setup-search');
+  let hidden=document.getElementById('pcs-setup-item-code');
+  if(search&&!hidden?.value)search.value='';
+}
+
+function pcsSetupSearch(q){
+  let drop=document.getElementById('pcs-setup-drop');
+  let body=document.getElementById('pcs-setup-drop-body');
+  if(!drop||!body)return;
+  let items=getPcsScopedItems();
+  let kw=(q||'').trim().toLowerCase();
+  let filtered=kw?items.filter(i=>(i.code+i.name).toLowerCase().includes(kw)):items.slice(0,50);
+  drop.style.display='block';
+  if(!filtered.length){
+    body.innerHTML='<tr><td colspan="7" style="padding:12px;text-align:center;color:var(--muted)">រកមិនឃើញ item</td></tr>';
+    return;
+  }
+  body.innerHTML=filtered.slice(0,80).map(i=>`<tr onclick="pcsSetupSelectItem('${i.code}')"
+      onmouseover="this.style.background='#edf4ff'" onmouseout="this.style.background=''"
+      style="cursor:pointer;border-bottom:1px solid #f0f0f0">
+      <td style="padding:6px 8px"><code style="font-size:11px;background:#f0f4ff;padding:2px 6px;border-radius:4px;color:#185fa5">${i.code}</code></td>
+      <td style="padding:6px 8px;font-weight:500">${i.name}</td>
+      <td style="padding:6px 8px;color:var(--muted)">${i.category||'-'}</td>
+      <td style="padding:6px 8px;color:#185fa5">${i.lot||'-'}</td>
+      <td style="padding:6px 8px;white-space:nowrap">${fd(i.expiry)}</td>
+      <td style="padding:6px 8px">${i.unit||'-'}</td>
+      <td style="padding:6px 8px">${i.size||'-'}</td>
+    </tr>`).join('');
+  setTimeout(()=>{
+    document.onclick=function(e){
+      if(!e.target.closest('#pcs-setup-drop')&&e.target.id!=='pcs-setup-search'){
+        drop.style.display='none';
+        document.onclick=null;
+      }
+    };
+  },0);
+}
+
+function pcsSetupSelectItem(code){
+  let item=allItems.find(i=>i.code===code);
+  if(!item)return;
+  document.getElementById('pcs-setup-item-code').value=code;
+  document.getElementById('pcs-setup-search').value=`${code} — ${item.name}`;
+  document.getElementById('pcs-setup-units').value=item.units_per_pack||'';
+  document.getElementById('pcs-setup-label').value=item.pcs_unit_label||'';
+  let drop=document.getElementById('pcs-setup-drop');
+  if(drop)drop.style.display='none';
+}
+
+function renderPcsSetupList(){
+  let body=document.getElementById('pcs-setup-body');
+  if(!body)return;
+  let items=getPcsScopedItems().filter(i=>i.units_per_pack&&i.units_per_pack>0);
+  body.innerHTML=items.length?items.map(i=>`<tr>
+      <td><code>${i.code}</code></td>
+      <td style="font-size:12px">${i.name}</td>
+      <td style="text-align:right;font-weight:600">${i.units_per_pack}</td>
+      <td style="font-size:12px">${i.pcs_unit_label||'-'}</td>
+      <td><button class="btn btn-sm" onclick="removePcsSetup('${i.code}')" title="លុប"><i class="ti ti-x" style="color:#a32d2d"></i></button></td>
+    </tr>`).join('')
+    :'<tr><td colspan="5"><div class="empty">មិនទាន់មាន Item កំណត់ទេ</div></td></tr>';
+}
+
+async function savePcsSetup(){
+  let code=document.getElementById('pcs-setup-item-code')?.value;
+  let units=parseInt(document.getElementById('pcs-setup-units')?.value)||0;
+  let label=document.getElementById('pcs-setup-label')?.value.trim()||'';
+  if(!code){toast('សូមជ្រើសរើស Item!','error');return;}
+  if(units<1){toast('សូមបញ្ចូលចំនួន PCS ត្រឹមត្រូវ!','error');return;}
+  if(!label){toast('សូមបញ្ចូលឈ្មោះ PCS Unit!','error');return;}
+  let {error}=await db.from('items').update({units_per_pack:units,pcs_unit_label:label}).eq('code',code);
+  if(error){toast('❌ Error: '+error.message,'error');return;}
+  let item=allItems.find(i=>i.code===code);
+  if(item){item.units_per_pack=units;item.pcs_unit_label=label;}
+  toast('✅ បានកំណត់ '+code+' សម្រាប់ PCS Withdraw!','success');
+  document.getElementById('pcs-setup-item-code').value='';
+  document.getElementById('pcs-setup-search').value='';
+  document.getElementById('pcs-setup-units').value='';
+  document.getElementById('pcs-setup-label').value='';
+  renderPcsSetupList();
+  loadPcsWithdraw();
+}
+
+async function removePcsSetup(code){
+  let {error}=await db.from('items').update({units_per_pack:null,pcs_unit_label:null}).eq('code',code);
+  if(error){toast('❌ Error: '+error.message,'error');return;}
+  let item=allItems.find(i=>i.code===code);
+  if(item){item.units_per_pack=null;item.pcs_unit_label=null;}
+  toast('លុប PCS setup សម្រាប់ '+code+' រួចរាល់','success');
+  renderPcsSetupList();
+  loadPcsWithdraw();
+}
+
+async function renderOpenPacksTable(){
+  let {data:packs,error}=await db.from('opened_pack_log').select('*').eq('status','Open').order('opened_at',{ascending:true});
+  let body=document.getElementById('pcs-open-body');
+  if(!body)return;
+  if(error){
+    body.innerHTML='<tr><td colspan="7"><div class="empty">Table <code>opened_pack_log</code> មិនទាន់ត្រូវបានបង្កើតទេ — សូមប្រាប់ admin ឱ្យរត់ SQL។</div></td></tr>';
+    return;
+  }
+  window._openPacks=packs||[];
+  body.innerHTML=(packs&&packs.length)?packs.map(p=>`<tr>
+      <td><code>${p.item_code}</code></td>
+      <td style="font-weight:500">${p.item_name||'-'}</td>
+      <td style="color:#185fa5">${p.lot||'-'}</td>
+      <td style="text-align:right">${p.total_pcs}</td>
+      <td style="text-align:right;font-weight:700;color:${p.remaining_pcs<=Math.ceil(p.total_pcs*0.2)?'#a32d2d':'#3b6d11'}">${p.remaining_pcs}</td>
+      <td style="font-size:12px;color:var(--muted)">${p.opened_by_name||'-'}</td>
+      <td style="font-size:12px;white-space:nowrap">${fd(p.opened_at)}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="7"><div class="empty">គ្មាន Pack កំពុងបើកទេ</div></td></tr>';
+}
+
+function onPcsItemChange(){
+  let code=document.getElementById('pcs-item-sel')?.value;
+  let infoBox=document.getElementById('pcs-open-pack-info');
+  let lotWrap=document.getElementById('pcs-new-lot-wrap');
+  if(!infoBox)return;
+  if(!code){infoBox.style.display='none';if(lotWrap)lotWrap.style.display='none';return;}
+  let item=allItems.find(i=>i.code===code);
+  let openPack=(window._openPacks||[]).find(p=>p.item_code===code);
+  infoBox.style.display='block';
+  if(openPack){
+    infoBox.innerHTML=`<i class="ti ti-package" style="color:#0f8a6e"></i> <b>Pack កំពុងបើក:</b> Lot ${openPack.lot||'-'} — សល់ <b>${openPack.remaining_pcs}/${openPack.total_pcs}</b> ${item?.pcs_unit_label||'pcs'}`;
+    if(lotWrap)lotWrap.style.display='none';
+  } else {
+    infoBox.innerHTML=`<i class="ti ti-alert-circle" style="color:#854f0b"></i> គ្មាន Pack កំពុងបើកទេសម្រាប់ item នេះ — ប្រព័ន្ធនឹង <b>បើក Pack ថ្មី</b> ដោយស្វ័យប្រវត្តិ ហើយកាត់ Balance <b>1 ${item?.unit||'kit'}</b>`;
+    if(lotWrap)lotWrap.style.display='block';
+  }
+}
+
+async function submitPcsWithdraw(){
+  let code=document.getElementById('pcs-item-sel')?.value;
+  let qtyNeeded=parseInt(document.getElementById('pcs-qty')?.value)||0;
+  let newLot=document.getElementById('pcs-new-lot')?.value.trim()||'';
+  if(!code){toast('សូមជ្រើសរើស Item!','error');return;}
+  if(qtyNeeded<1){toast('សូមបញ្ចូលចំនួន PCS ត្រឹមត្រូវ!','error');return;}
+  let item=allItems.find(i=>i.code===code);
+  if(!item||!item.units_per_pack){toast('Item នេះមិនបានកំណត់ Units per Pack ទេ!','error');return;}
+
+  let lotsUsed=[]; // {lot, qty} for audit note
+  let remaining=qtyNeeded;
+  let safety=0;
+  let curBalance=item.balance||0;
+
+  while(remaining>0){
+    safety++;if(safety>20){toast('❌ ចំនួន PCS ច្រើនពេក! សូមបំបែកជាដងច្រើន','error');return;}
+    let {data:openPack}=await db.from('opened_pack_log').select('*').eq('item_code',code).eq('status','Open').order('opened_at',{ascending:true}).limit(1).maybeSingle();
+    if(openPack&&openPack.remaining_pcs>0){
+      let take=Math.min(remaining,openPack.remaining_pcs);
+      let newRemaining=openPack.remaining_pcs-take;
+      let updates={remaining_pcs:newRemaining};
+      if(newRemaining===0){updates.status='Closed';updates.closed_at=new Date().toISOString();}
+      let {error:e1}=await db.from('opened_pack_log').update(updates).eq('id',openPack.id);
+      if(e1){toast('❌ Error: '+e1.message,'error');return;}
+      lotsUsed.push({lot:openPack.lot||'-',qty:take});
+      remaining-=take;
+    } else {
+      // Need to open a new pack — requires 1 whole unit available in stock
+      if(curBalance<1){
+        toast(`❌ Balance មិនគ្រប់គ្រាន់សម្រាប់បើក Pack ថ្មី! (Balance: ${curBalance} ${item.unit||'kit'})`,'error');
+        return;
+      }
+      let {data:newPack,error:e2}=await db.from('opened_pack_log').insert({
+        item_code:code,item_name:item.name,lot:newLot||'',
+        total_pcs:item.units_per_pack,remaining_pcs:item.units_per_pack,
+        unit_label:item.pcs_unit_label||'pcs',
+        opened_by:CU.id,opened_by_name:CU.full_name||CU.username,status:'Open'
+      }).select().single();
+      if(e2){toast('❌ Error opening pack: '+e2.message,'error');return;}
+      // Deduct 1 whole unit from item balance (kit consumed from stock)
+      let {error:e3}=await db.from('items').update({balance:curBalance-1,stock_out:(item.stock_out||0)+1}).eq('code',code);
+      if(e3){toast('❌ Error updating balance: '+e3.message,'error');return;}
+      await syncMonthlyStock(code,item.name,item.category||'','out',1);
+      curBalance-=1;item.balance=curBalance;
+      // loop again — will now find this pack as the open one
+    }
+  }
+
+  // Log the PCS withdrawal transaction for traceability
+  let lotNote=lotsUsed.map(l=>`${l.lot}×${l.qty}`).join(', ');
+  await db.from('stock_out_log').insert({
+    date:new Date().toISOString().split('T')[0],
+    item_code:code,item_name:item.name,
+    lot:lotsUsed[0]?.lot||newLot||'',
+    unit:item.pcs_unit_label||'pcs',size:item.size,
+    qty:qtyNeeded,
+    source:'PCS Withdraw',
+    department:CU.department||'',ward:CU.ward||'',
+    created_by:CU.id,created_by_name:CU.full_name||CU.username
+  });
+
+  document.getElementById('pcs-qty').value=1;
+  document.getElementById('pcs-new-lot').value='';
+  toast(`✅ បានដក ${qtyNeeded} ${item.pcs_unit_label||'pcs'} (${lotNote})`,'success');
+  await renderOpenPacksTable();
+  renderPcsQuickGrid();
+  onPcsItemChange();
+  setTimeout(()=>{let q=document.getElementById('pcs-qty');if(q){q.focus();q.select();}},50);
 }
 
 async function loadMyRequests(filter){
