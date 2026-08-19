@@ -1221,6 +1221,15 @@ function printMyRequests(){
           <button class="btn btn-sm" onclick="pcsQtySet(10)">10</button>
         </div>
       </div>
+      <div class="form-group" style="max-width:280px">
+        <label>ជ្រើសរើស អ្នកដក (Withdrawn By)</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="pcs-staff-select" style="flex:1;padding:8px 10px;font-size:13px;font-weight:600;border-radius:8px;border:1.5px solid var(--border)">
+            <option value="" data-name="">-- ជ្រើស --</option>
+          </select>
+          <button class="btn btn-sm" onclick="addPcsStaffRecipientQuick()" title="បន្ថែមឈ្មោះថ្មី" style="padding:8px 10px;font-size:14px;font-weight:700"><i class="ti ti-plus"></i></button>
+        </div>
+      </div>
       <div class="form-group" id="pcs-new-lot-wrap" style="display:none;max-width:280px">
         <label>Lot No (ត្រូវការ ព្រោះនឹងបើក Pack ថ្មី)</label>
         <input id="pcs-new-lot" placeholder="Lot No...">
@@ -1240,6 +1249,45 @@ function printMyRequests(){
     <tbody id="pcs-open-body"><tr><td colspan="7"><div class="empty">Loading...</div></td></tr></tbody>
     </table>
   </div>
+
+  <div style="display:flex;align-items:center;gap:10px;margin:18px 0 8px;flex-wrap:wrap">
+    <div style="font-size:13px;font-weight:600;color:var(--muted)"><i class="ti ti-history" style="color:#7c3aed"></i> ប្រវត្តិដកប្រើ PCS (History)</div>
+    <input type="month" id="pcs-hist-month" onchange="loadPcsWithdrawHistory()" style="padding:5px 10px;font-size:12px">
+    <div style="flex:1"></div>
+    <button class="btn btn-sm" onclick="printPcsWithdrawHistory()"><i class="ti ti-printer"></i> Print</button>
+  </div>
+  <div class="tbl-wrap">
+    <table><thead><tr>
+      <th>Date</th><th>Item Code</th><th>Item Name</th><th>Lot</th>
+      <th style="text-align:right">Qty</th><th>អ្នកដក (Withdrawn By)</th>
+    </tr></thead>
+    <tbody id="pcs-hist-body"><tr><td colspan="6"><div class="empty">Loading...</div></td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== MY MONTHLY REPORT (staff → admin handover) ===== -->
+<div class="page" id="page-my-monthly-report">
+  <div class="page-header">
+    <h2><i class="ti ti-report" style="color:#0f6e56"></i> Monthly Report</h2>
+    <div style="font-size:12px;color:var(--muted)">Report ប្រចាំខែ សម្រាប់ប្រគល់ជូន Admin (ISO 15189 Traceability)</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="form-group" style="margin:0">
+        <label>ខែ / ឆ្នាំ</label>
+        <input type="month" id="mmr-month-picker" onchange="loadMyMonthlyReport()">
+      </div>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="printMyMonthlyReport()" style="padding:12px 24px"><i class="ti ti-printer"></i> Print / Export Report</button>
+    </div>
+  </div>
+
+  <div id="mmr-summary-cards" class="stats-grid" style="margin-top:14px"></div>
+
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin:18px 0 8px"><i class="ti ti-list-check"></i> សេចក្តីសង្ខេប (Preview)</div>
+  <div id="mmr-preview" class="card"><div class="empty">កំពុងផ្ទុក...</div></div>
 </div>
 
 <!-- ===== ALERTS ===== -->
@@ -2068,7 +2116,8 @@ function setupNav(){
       <div class="nav-item" data-page="my-usage"><i class="ti ti-chart-histogram" style="color:#0f6e56"></i> My Usage Summary</div>
       <div class="nav-item" data-page="my-turnaround"><i class="ti ti-clock-hour-4" style="color:#185fa5"></i> Request Turnaround</div>
       <div class="nav-item" data-page="my-expiry"><i class="ti ti-calendar-exclamation" style="color:#a32d2d"></i> Expiry Alert</div>
-      <div class="nav-item" data-page="pcs-withdraw"><i class="ti ti-box-multiple" style="color:#b7791f"></i> PCS Withdraw</div>`;
+      <div class="nav-item" data-page="pcs-withdraw"><i class="ti ti-box-multiple" style="color:#b7791f"></i> PCS Withdraw</div>
+      <div class="nav-item" data-page="my-monthly-report"><i class="ti ti-report" style="color:#0f6e56"></i> Monthly Report</div>`;
   }
   document.querySelectorAll('.nav-item[data-page]').forEach(el=>{
     el.addEventListener('click',()=>goPage(el.dataset.page));
@@ -2195,6 +2244,7 @@ function goPage(p){
   else if(p==='my-turnaround')loadMyTurnaround();
   else if(p==='my-expiry')loadMyExpiryAlert();
   else if(p==='pcs-withdraw')loadPcsWithdraw();
+  else if(p==='my-monthly-report')loadMyMonthlyReport();
   else if(p==='alerts')loadAlerts();
   else if(p==='nonconforming')loadNonConforming();
   else if(p==='report')loadReport();
@@ -5227,6 +5277,9 @@ async function staffScanStockOut(val){
   // Load lots for FEFO
   let {data:lots}=await db.from('item_lots').select('*').eq('item_code',item.code).gt('balance',0).order('expiry',{ascending:true});
   lots=lots||[];
+  // Load THIS staff's own personal "ជ្រើសរើស បុគ្គលិក" list (private per user —
+  // each staff only sees names they themselves added, not other staff's names)
+  let staffRecipients=await getListItems('staff_recipient_'+CU.id);
   let resultEl=document.getElementById('so-scan-result');
   if(!resultEl)return;
   let lotOpts=lots.length?lots.map((l,i)=>`
@@ -5280,14 +5333,10 @@ async function staffScanStockOut(val){
       <div style="font-size:13px;font-weight:600;white-space:nowrap;color:var(--text)">បុគ្គលិក:</div>
       <select id="so-staff-select" style="width:110px;padding:6px 10px;font-size:13px;font-weight:600;border-radius:8px;border:1.5px solid var(--border)">
         <option value="" data-name="">-- ជ្រើស --</option>
-        <option value="YMR" data-name="YMR">YMR</option>
-        <option value="DOD" data-name="DOD">DOD</option>
-        <option value="SCL" data-name="SCL">SCL</option>
-        <option value="TSP" data-name="TSP">TSP</option>
-        <option value="UCN" data-name="UCN">UCN</option>
-        <option value="HSC" data-name="HSC">HSC</option>
-        <option value="SSD" data-name="SSD">SSD</option>
+        ${staffRecipients&&staffRecipients.length?staffRecipients.map(s=>`<option value="${s.value}" data-name="${s.value}">${s.value}</option>`).join(''):''}
       </select>
+      <button class="btn btn-sm" onclick="addStaffRecipientQuick()" title="បន្ថែមឈ្មោះថ្មី" style="padding:6px 10px;font-size:14px;font-weight:700"><i class="ti ti-plus"></i></button>
+      ${(!staffRecipients||!staffRecipients.length)?'<div style="font-size:10px;color:#a32d2d;white-space:nowrap">គ្មានទិន្នន័យ — ចុច "+" ដើម្បីបន្ថែម</div>':''}
       <div style="flex:1"></div>
       <button class="btn" onclick="document.getElementById('so-scan-result').style.display='none';document.getElementById('so-scan-input').value='';document.getElementById('so-search-drop').style.display='none'" style="padding:10px 20px">
         Cancel
@@ -5299,6 +5348,34 @@ async function staffScanStockOut(val){
     </div>
   </div>`;
   document.getElementById('so-scan-input').value='';
+}
+
+// Lets staff add a new "ជ្រើសរើស បុគ្គលិក" name themselves, right from Stock Out —
+// no need to ask Admin / go into List Management. Private to this user only —
+// stored under a per-user key so other staff never see it in their own dropdown.
+async function addStaffRecipientQuick(){
+  let val=(prompt('បញ្ចូលឈ្មោះកាត់ថ្មី (ឧ. ABC):')||'').trim().toUpperCase();
+  if(!val)return;
+  let myKey='staff_recipient_'+CU.id;
+  // Avoid duplicates (case-insensitive)
+  let existing=(_listCache[myKey]||[]).find(s=>s.value.toUpperCase()===val);
+  if(existing){
+    toast(val+' មានរួចហើយ!','info');
+    let sel=document.getElementById('so-staff-select');
+    if(sel)sel.value=existing.value;
+    return;
+  }
+  let {error}=await db.from('app_settings').insert({type:myKey,value:val});
+  if(error){toast('❌ Error: '+error.message,'error');return;}
+  toast('✅ បានបន្ថែម '+val+'!','success');
+  // Refresh the dropdown in place and select the newly added name
+  let fresh=await getListItems(myKey);
+  let sel=document.getElementById('so-staff-select');
+  if(sel){
+    sel.innerHTML='<option value="" data-name="">-- ជ្រើស --</option>'+
+      fresh.map(s=>`<option value="${s.value}" data-name="${s.value}">${s.value}</option>`).join('');
+    sel.value=val;
+  }
 }
 
 async function staffConfirmStockOut(code,name,unit,source,maxBal){
@@ -5676,9 +5753,225 @@ function printMyTurnaround(){
 }
 
 // ===== EXPIRY ALERT SCOPED (Staff) =====
+// ===== MY MONTHLY REPORT (staff → admin handover, ISO 15189 traceability) =====
+function getMyReportScopedItems(){
+  let dept=CU.department||CU.ward||'';
+  let visCats=window._myVisCats||[],visItems=window._myVisItems||[];
+  let hasVis=visCats.length>0||visItems.length>0;
+  let items=allItems.slice();
+  if(hasVis)items=items.filter(i=>visCats.includes(i.category)||visItems.includes(i.code));
+  else if(dept)items=items.filter(i=>i.category===dept||i.category==='Consumables');
+  return items;
+}
+
+function initMyMonthlyReportPicker(){
+  let picker=document.getElementById('mmr-month-picker');
+  if(picker&&!picker.value){
+    let now=new Date();
+    picker.value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  }
+}
+
+async function gatherMyMonthlyReportData(){
+  initMyMonthlyReportPicker();
+  let picker=document.getElementById('mmr-month-picker');
+  let [yearStr,monthStr]=(picker?.value||'').split('-');
+  let year=parseInt(yearStr)||new Date().getFullYear();
+  let month=parseInt(monthStr)||new Date().getMonth()+1;
+  let monthStart=year+'-'+String(month).padStart(2,'0')+'-01';
+  let nextMonth=month===12?1:month+1,nextYear=month===12?year+1:year;
+  let monthEnd=nextYear+'-'+String(nextMonth).padStart(2,'0')+'-01';
+
+  let items=getMyReportScopedItems();
+  let itemCodes=items.map(i=>i.code);
+
+  // 1) Stock Summary — reuse existing monthly_stock aggregation
+  let monthlyMap=await getMonthlyData(month,year);
+  let stockRows=items.map(i=>{
+    let ms=monthlyMap[i.code];
+    return{
+      code:i.code,name:i.name,category:i.category,unit:i.unit,
+      opening:ms?ms.opening:i.balance||0,
+      stockIn:ms?(ms.stock_in||0):0,
+      stockOut:ms?(ms.stock_out||0):0,
+      closing:ms?ms.closing:i.balance||0
+    };
+  });
+  let outOfStock=items.filter(i=>(i.balance||0)<=0);
+
+  // 2) Top Consumption — aggregate this staff's stock_out_log for the month
+  let {data:soLogs}=await db.from('stock_out_log').select('*').gte('date',monthStart).lt('date',monthEnd);
+  let soScoped=(soLogs||[]).filter(l=>itemCodes.includes(l.item_code));
+  let consumeMap={};
+  soScoped.forEach(l=>{
+    if(!consumeMap[l.item_code])consumeMap[l.item_code]={code:l.item_code,name:l.item_name,qty:0};
+    consumeMap[l.item_code].qty+=(l.qty||0);
+  });
+  let topConsumption=Object.values(consumeMap).sort((a,b)=>b.qty-a.qty).slice(0,10);
+
+  // 3) Request Status — this staff's own requests for the month
+  let {data:reqs}=await db.from('requests').select('*').eq('requested_by',CU.id).gte('date',monthStart).lt('date',monthEnd).neq('type','PO');
+  reqs=reqs||[];
+  let reqStats={pending:reqs.filter(r=>r.status==='Pending').length,approved:reqs.filter(r=>r.status==='Approved').length,rejected:reqs.filter(r=>r.status==='Rejected').length,total:reqs.length};
+
+  // 4) Expiry Alert — forward-looking (not month-bound), within 90 days from today
+  let expiring=items.filter(i=>{let d=daysDiff(i.expiry);return d<=90&&d>=0;}).sort((a,b)=>daysDiff(a.expiry)-daysDiff(b.expiry));
+
+  // 5) Non-Conforming — reported by this staff during the month
+  let {data:ncLogs}=await db.from('nonconforming_log').select('*').eq('reported_by',CU.id).gte('reported_at',monthStart).lt('reported_at',monthEnd);
+  ncLogs=ncLogs||[];
+
+  // 6) PCS Opened Pack — currently open packs among this staff's scoped items
+  let {data:packs}=await db.from('opened_pack_log').select('*').eq('status','Open');
+  let scopedPacks=(packs||[]).filter(p=>itemCodes.includes(p.item_code));
+
+  return{year,month,items,stockRows,outOfStock,topConsumption,reqStats,reqs,expiring,ncLogs,scopedPacks};
+}
+
+async function loadMyMonthlyReport(){
+  let data=await gatherMyMonthlyReportData();
+  window._mmrData=data;
+
+  let cardsEl=document.getElementById('mmr-summary-cards');
+  if(cardsEl)cardsEl.innerHTML=`
+    <div class="stat-card" style="background:var(--mint)">
+      <div class="stat-label">Item ក្នុង Scope</div>
+      <div class="stat-value" style="color:#0f6e56">${data.items.length}</div>
+      <div class="stat-sub">${data.outOfStock.length} អស់ស្តុក</div>
+    </div>
+    <div class="stat-card" style="background:#e8f0fb">
+      <div class="stat-label">Top Consumption</div>
+      <div class="stat-value" style="color:#185fa5">${data.topConsumption.length}</div>
+      <div class="stat-sub">items ប្រើប្រាស់</div>
+    </div>
+    <div class="stat-card" style="background:#fdf1e3">
+      <div class="stat-label">Request ខែនេះ</div>
+      <div class="stat-value" style="color:#854f0b">${data.reqStats.total}</div>
+      <div class="stat-sub">${data.reqStats.pending} Pending</div>
+    </div>
+    <div class="stat-card" style="background:#fcebeb">
+      <div class="stat-label">ជិត Expiry (90ថ្ងៃ)</div>
+      <div class="stat-value" style="color:#a32d2d">${data.expiring.length}</div>
+      <div class="stat-sub">${data.ncLogs.length} Non-Conforming</div>
+    </div>`;
+
+  let prevEl=document.getElementById('mmr-preview');
+  if(prevEl)prevEl.innerHTML=`
+    <div style="font-size:13px;line-height:1.9">
+      <div><b>1. Stock Summary:</b> ${data.items.length} items ក្នុង Scope, ${data.outOfStock.length} item អស់ស្តុក</div>
+      <div><b>2. Top Consumption:</b> ${data.topConsumption.slice(0,3).map(t=>t.code).join(', ')||'-'}${data.topConsumption.length>3?' ...':''}</div>
+      <div><b>3. Request:</b> ${data.reqStats.total} សរុប — ✅ ${data.reqStats.approved} Approved, ⏳ ${data.reqStats.pending} Pending, ❌ ${data.reqStats.rejected} Rejected</div>
+      <div><b>4. Expiry Alert:</b> ${data.expiring.length} item ជិត Expiry (≤90 ថ្ងៃ)</div>
+      <div><b>5. Non-Conforming:</b> ${data.ncLogs.length} report ខែនេះ</div>
+      <div><b>6. PCS Opened Pack:</b> ${data.scopedPacks.length} pack កំពុងបើក</div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:12px"><i class="ti ti-info-circle"></i> ចុច "Print / Export Report" ខាងលើដើម្បីមើលឯកសារពេញលេញ</div>`;
+}
+
+function printMyMonthlyReport(){
+  let data=window._mmrData;
+  if(!data){toast('សូមរង់ចាំទិន្នន័យផ្ទុករួច','error');return;}
+  let monthName=new Date(data.year,data.month-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  let dept=CU.department||CU.ward||'ទាំងអស់';
+
+  let stockRowsHTML=data.stockRows.map(r=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px"><code>${r.code}</code></td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${r.name}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${r.category||'-'}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px">${r.opening}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px;color:#0f6e56">+${r.stockIn}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px;color:#a32d2d">-${r.stockOut}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px;font-weight:700">${r.closing}</td>
+  </tr>`).join('');
+
+  let topHTML=data.topConsumption.map((t,idx)=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:center;font-size:10px">${idx+1}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px"><code>${t.code}</code></td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${t.name}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px;font-weight:700">${t.qty}</td>
+  </tr>`).join('')||'<tr><td colspan="4" style="padding:8px;text-align:center;color:#888;border:1px solid #ddd">គ្មានទិន្នន័យ</td></tr>';
+
+  let reqHTML=data.reqs.slice(0,15).map(r=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${fd(r.date)}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${r.req_no}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${r.status}</td>
+  </tr>`).join('')||'<tr><td colspan="3" style="padding:8px;text-align:center;color:#888;border:1px solid #ddd">គ្មាន Request</td></tr>';
+
+  let expHTML=data.expiring.slice(0,20).map(i=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px"><code>${i.code}</code></td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${i.name}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${fd(i.expiry)}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px;font-weight:700;color:${daysDiff(i.expiry)<=30?'#a32d2d':'#854f0b'}">${daysDiff(i.expiry)}</td>
+  </tr>`).join('')||'<tr><td colspan="4" style="padding:8px;text-align:center;color:#888;border:1px solid #ddd">គ្មាន item ជិត Expiry ✓</td></tr>';
+
+  let ncHTML=data.ncLogs.map(n=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${fd(n.reported_at)}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px"><code>${n.item_code}</code></td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${n.reason||'-'}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${n.status||'-'}</td>
+  </tr>`).join('')||'<tr><td colspan="4" style="padding:8px;text-align:center;color:#888;border:1px solid #ddd">គ្មាន Non-Conforming Report ✓</td></tr>';
+
+  let pcsHTML=data.scopedPacks.map(p=>`<tr>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px"><code>${p.item_code}</code></td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${p.item_name||'-'}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;font-size:10px">${p.lot||'-'}</td>
+    <td style="padding:4px 6px;border:1px solid #ddd;text-align:right;font-size:10px">${p.remaining_pcs}/${p.total_pcs}</td>
+  </tr>`).join('')||'<tr><td colspan="4" style="padding:8px;text-align:center;color:#888;border:1px solid #ddd">គ្មាន Pack កំពុងបើក</td></tr>';
+
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — Monthly Report (សម្រាប់ Admin)</h2>
+      <div class="sub">Department: <b>${dept}</b> | ខែ: <b>${monthName}</b> | រៀបចំដោយ: <b>${CU.full_name||CU.username}</b></div>
+    </div>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">1. សង្ខេប Stock (Balance Summary)</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Code</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Name</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Category</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Opening</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">In</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Out</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Closing</th>
+    </tr></thead><tbody>${stockRowsHTML}</tbody></table>
+    <div style="font-size:10px;color:#888;margin-top:4px">⚠️ Out of Stock: ${data.outOfStock.length} items ${data.outOfStock.length?'('+data.outOfStock.map(i=>i.code).slice(0,10).join(', ')+')':''}</div>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">2. Item ប្រើប្រាស់ច្រើនបំផុត (Top 10)</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">#</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Code</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Name</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Qty Out</th>
+    </tr></thead><tbody>${topHTML}</tbody></table>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">3. ស្ថានភាព Request (${data.reqStats.total} សរុប — ✅${data.reqStats.approved} ⏳${data.reqStats.pending} ❌${data.reqStats.rejected})</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Date</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Req No</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Status</th>
+    </tr></thead><tbody>${reqHTML}</tbody></table>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">4. Expiry Alert (≤90 ថ្ងៃ)</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Code</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Name</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Expiry</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Days</th>
+    </tr></thead><tbody>${expHTML}</tbody></table>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">5. Non-Conforming Report</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Date</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Code</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Reason</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Status</th>
+    </tr></thead><tbody>${ncHTML}</tbody></table>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">6. PCS Opened Pack (កំពុងបើក)</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Code</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Name</th>
+      <th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Lot</th><th style="padding:5px 6px;border:1px solid #ddd;font-size:10px">Remaining</th>
+    </tr></thead><tbody>${pcsHTML}</tbody></table>
+
+    <div style="margin-top:30px;display:flex;justify-content:space-between;font-size:11px">
+      <div>Prepared by (Staff): _______________________</div>
+      <div>Reviewed by (Admin/Department Head): _______________________</div>
+    </div>`);
+}
+
+
 async function loadMyExpiryAlert(){
   let dept=CU.department||CU.ward||'';
-  let lbl=document.getElementById('me-dept-label');
   if(lbl)lbl.textContent=dept?`Department: ${dept}`:'ទាំងអស់ item';
   let range=parseInt(document.getElementById('me-range')?.value)||60;
   let cat=document.getElementById('me-cat')?.value||'';
@@ -5779,7 +6072,38 @@ async function loadPcsWithdraw(){
   renderPcsSetupList();
   await renderOpenPacksTable();
   renderPcsQuickGrid();
+  await populatePcsStaffSelect();
+  await loadPcsWithdrawHistory();
   onPcsItemChange();
+}
+
+async function populatePcsStaffSelect(){
+  let sel=document.getElementById('pcs-staff-select');
+  if(!sel)return;
+  let list=await getListItems('staff_recipient_'+CU.id);
+  let cur=sel.value;
+  sel.innerHTML='<option value="" data-name="">-- ជ្រើស --</option>'+
+    (list||[]).map(s=>`<option value="${s.value}" data-name="${s.value}">${s.value}</option>`).join('');
+  if(cur)sel.value=cur;
+}
+
+async function addPcsStaffRecipientQuick(){
+  let val=(prompt('បញ្ចូលឈ្មោះកាត់ថ្មី (ឧ. ABC):')||'').trim().toUpperCase();
+  if(!val)return;
+  let myKey='staff_recipient_'+CU.id;
+  let existing=(_listCache[myKey]||[]).find(s=>s.value.toUpperCase()===val);
+  if(existing){
+    toast(val+' មានរួចហើយ!','info');
+    let sel=document.getElementById('pcs-staff-select');
+    if(sel)sel.value=existing.value;
+    return;
+  }
+  let {error}=await db.from('app_settings').insert({type:myKey,value:val});
+  if(error){toast('❌ Error: '+error.message,'error');return;}
+  toast('✅ បានបន្ថែម '+val+'!','success');
+  await populatePcsStaffSelect();
+  let sel=document.getElementById('pcs-staff-select');
+  if(sel)sel.value=val;
 }
 
 function renderPcsQuickGrid(){
@@ -6015,6 +6339,8 @@ async function submitPcsWithdraw(){
   let code=document.getElementById('pcs-item-sel')?.value;
   let qtyNeeded=parseInt(document.getElementById('pcs-qty')?.value)||0;
   let newLot=document.getElementById('pcs-new-lot')?.value.trim()||'';
+  let staffSel=document.getElementById('pcs-staff-select');
+  let staffName=staffSel?.selectedOptions[0]?.dataset.name||CU.full_name||CU.username;
   if(!code){toast('សូមជ្រើសរើស Item!','error');return;}
   if(qtyNeeded<1){toast('សូមបញ្ចូលចំនួន PCS ត្រឹមត្រូវ!','error');return;}
   let item=allItems.find(i=>i.code===code);
@@ -6069,7 +6395,7 @@ async function submitPcsWithdraw(){
     qty:qtyNeeded,
     source:'PCS Withdraw',
     department:CU.department||'',ward:CU.ward||'',
-    created_by:CU.id,created_by_name:CU.full_name||CU.username
+    created_by:CU.id,created_by_name:staffName
   });
 
   document.getElementById('pcs-qty').value=1;
@@ -6077,8 +6403,90 @@ async function submitPcsWithdraw(){
   toast(`✅ បានដក ${qtyNeeded} ${item.pcs_unit_label||'pcs'} (${lotNote})`,'success');
   await renderOpenPacksTable();
   renderPcsQuickGrid();
+  await loadPcsWithdrawHistory();
   onPcsItemChange();
   setTimeout(()=>{let q=document.getElementById('pcs-qty');if(q){q.focus();q.select();}},50);
+}
+
+// ===== PCS WITHDRAW HISTORY (who withdrew what, and when) =====
+async function loadPcsWithdrawHistory(){
+  let monthPicker=document.getElementById('pcs-hist-month');
+  let itemCodes=getPcsScopedItems().map(i=>i.code);
+  let q=db.from('stock_out_log').select('*').eq('source','PCS Withdraw').order('created_at',{ascending:false}).limit(200);
+  if(monthPicker?.value){
+    let [y,m]=monthPicker.value.split('-');
+    let start=y+'-'+m+'-01';
+    let nm=parseInt(m)===12?1:parseInt(m)+1,ny=parseInt(m)===12?parseInt(y)+1:parseInt(y);
+    let end=ny+'-'+String(nm).padStart(2,'0')+'-01';
+    q=q.gte('date',start).lt('date',end);
+  }
+  let {data:logs}=await q;
+  logs=(logs||[]).filter(l=>itemCodes.includes(l.item_code));
+  window._pcsHistLogs=logs;
+  let body=document.getElementById('pcs-hist-body');
+  if(!body)return;
+  body.innerHTML=logs.length?logs.map(l=>`<tr>
+      <td style="font-size:12px;white-space:nowrap">${fd(l.date)}</td>
+      <td><code>${l.item_code}</code></td>
+      <td style="font-size:12px">${l.item_name}</td>
+      <td style="font-size:12px;color:#185fa5">${l.lot||'-'}</td>
+      <td style="text-align:right;font-weight:700;color:#a32d2d">${l.qty}</td>
+      <td style="font-size:12px;font-weight:600">${l.created_by_name||'-'}</td>
+    </tr>`).join('')
+    :'<tr><td colspan="6"><div class="empty">គ្មានប្រវត្តិដកប្រើ PCS</div></td></tr>';
+}
+
+function printPcsWithdrawHistory(){
+  let logs=window._pcsHistLogs||[];
+  let monthPicker=document.getElementById('pcs-hist-month');
+  let monthLabel=monthPicker?.value?new Date(monthPicker.value+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'}):'ទាំងអស់';
+  let dept=CU.department||CU.ward||'ទាំងអស់';
+  let rows=logs.map(l=>`<tr>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px;white-space:nowrap">${fd(l.date)}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px"><code>${l.item_code}</code></td>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px">${l.item_name}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px">${l.lot||'-'}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:right;font-size:11px;font-weight:700">${l.qty}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px;font-weight:600">${l.created_by_name||'-'}</td>
+    </tr>`).join('')||'<tr><td colspan="6" style="padding:10px;text-align:center;color:#888;border:1px solid #ddd">គ្មានប្រវត្តិ</td></tr>';
+
+  // Summary by withdrawer
+  let byPerson={};
+  logs.forEach(l=>{
+    let n=l.created_by_name||'មិនស្គាល់';
+    byPerson[n]=(byPerson[n]||0)+(l.qty||0);
+  });
+  let personRows=Object.entries(byPerson).sort((a,b)=>b[1]-a[1]).map(([name,qty])=>`<tr>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px">${name}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:right;font-size:11px;font-weight:700">${qty}</td>
+    </tr>`).join('')||'<tr><td colspan="2" style="padding:10px;text-align:center;color:#888;border:1px solid #ddd">-</td></tr>';
+
+  doPrint(`
+    <div class="header">
+      <h2>🏥 TSNHL Lab — ប្រវត្តិដកប្រើ PCS (PCS Withdraw History)</h2>
+      <div class="sub">Department: <b>${dept}</b> | ខែ: <b>${monthLabel}</b> | បោះពុម្ពដោយ: <b>${CU.full_name||CU.username}</b></div>
+    </div>
+
+    <h3 style="font-size:13px;margin:14px 0 6px;color:#185fa5">សង្ខេបតាមអ្នកដក (Summary by Withdrawer)</h3>
+    <table style="width:100%;border-collapse:collapse;max-width:400px"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px;text-align:left">អ្នកដក</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">សរុប Qty</th>
+    </tr></thead><tbody>${personRows}</tbody></table>
+
+    <h3 style="font-size:13px;margin:16px 0 6px;color:#185fa5">ប្រវត្តិលម្អិត (Detail)</h3>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#e8f0fb">
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">Date</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">Item Code</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">Item Name</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">Lot</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">Qty</th>
+      <th style="padding:5px 8px;border:1px solid #ddd;font-size:11px">អ្នកដក</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+
+    <div style="margin-top:30px;display:flex;justify-content:space-between;font-size:11px">
+      <div>Prepared by: _______________________</div>
+      <div>Verified by (Supervisor): _______________________</div>
+    </div>`);
 }
 
 async function loadMyRequests(filter){
@@ -8829,7 +9237,12 @@ async function loadVisibility(){
   el.innerHTML=(users||[]).length?(users||[]).map(u=>{
     let uv=userVisData[u.id]||{cats:[],items:[]};
     let catTags=uv.cats.map(c=>`<span class="badge" style="background:#e8f0fb;color:#0c447c;margin:1px">${c}</span>`).join('');
-    let itemTags=uv.items.map(ic=>{let it=allItems.find(i=>i.code===ic);return`<span class="badge" style="background:#eaf3de;color:#3b6d11;margin:1px">${ic}${it?' — '+it.name.substring(0,12)+'..':''}</span>`}).join('');
+    let itemTags='';
+    if(uv.items.length){
+      let shown=uv.items.slice(0,3).map(ic=>{let it=allItems.find(i=>i.code===ic);return`<span class="badge" style="background:#eaf3de;color:#3b6d11;margin:1px">${ic}${it?' — '+it.name.substring(0,12)+'..':''}</span>`}).join('');
+      let extra=uv.items.length-3;
+      itemTags=shown+(extra>0?` <span class="badge" style="background:#f0eeea;color:#6b6a66;cursor:pointer" onclick="openVisibilityEdit('${u.id}','${(u.full_name||u.username).replace(/'/g,"\\'")}')" title="ចុចដើម្បីមើលទាំងអស់">+${extra} ទៀត</span>`:'');
+    }
     let noneTag='<span class="badge" style="background:#f0eeea;color:#6b6a66">ទាំងអស់ (No filter)</span>';
     return`<tr>
       <td style="font-weight:600">${u.full_name||u.username}</td>
@@ -8842,40 +9255,45 @@ async function loadVisibility(){
   }).join(''):'<tr><td colspan="6"><div class="empty">គ្មាន User</div></td></tr>';
 }
 
+let _visSelectedCats=new Set();
+let _visSelectedItems=new Set();
+
 async function openVisibilityEdit(userId,userName){
   let uv=userVisData[userId]||{cats:[],items:[]};
   let cleanCats=CATS.map(c=>c.split('|')[0].trim());
+  _visSelectedCats=new Set(uv.cats);
+  _visSelectedItems=new Set(uv.items);
+
   let catChecks=cleanCats.map(c=>`
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;background:${uv.cats.includes(c)?'#e8f0fb':''}">
-      <input type="checkbox" id="vc-cat-${c.replace(/[^a-z0-9]/gi,'')}" value="${c}" ${uv.cats.includes(c)?'checked':''} style="width:16px;height:16px;cursor:pointer">
-      <span style="font-size:13px;font-weight:${uv.cats.includes(c)?'600':'400'}">${c}</span>
-    </label>`).join('');
-  let itemChecks=allItems.map(i=>`
-    <label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;background:${uv.items.includes(i.code)?'#eaf3de':''}">
-      <input type="checkbox" id="vc-item-${i.code}" value="${i.code}" ${uv.items.includes(i.code)?'checked':''} style="width:16px;height:16px;cursor:pointer">
-      <span style="font-size:12px"><code style="font-size:11px">${i.code}</code> ${i.name}</span>
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;background:${_visSelectedCats.has(c)?'#e8f0fb':''}">
+      <input type="checkbox" class="vc-cat-chk" value="${c}" ${_visSelectedCats.has(c)?'checked':''} onchange="onVisCatToggle(this)" style="width:16px;height:16px;cursor:pointer">
+      <span style="font-size:13px;font-weight:${_visSelectedCats.has(c)?'600':'400'}">${c}</span>
     </label>`).join('');
 
   openModal(`<h3><i class="ti ti-eye" style="color:var(--blue)"></i> Item Visibility — <strong>${userName}</strong></h3>
-  <div style="background:#e8f0fb;border-radius:8px;padding:8px 12px;font-size:12px;color:#185fa5;margin-bottom:14px">
-    <i class="ti ti-info-circle"></i> ជ្រើស Category → User ឃើញ items ទាំងអស់ក្នុង Category | ជ្រើស Item ជាក់លាក់ → ឃើញ items ជ្រើស | ទទេ = ឃើញទាំងអស់
+  <div style="background:#e8f0fb;border-radius:8px;padding:8px 12px;font-size:12px;color:#185fa5;margin-bottom:8px">
+    <i class="ti ti-info-circle"></i> ជ្រើស Category → User ឃើញ items ទាំងអស់ក្នុង Category | ជ្រើស Item ជាក់លាក់ → ឃើញ items ជ្រើស | ទទេ = ឃើញទាំងអស់ — ជ្រើស Category ដើម្បី filter បញ្ជី Item ខាងស្តាំ
+  </div>
+  <div id="vc-cat-warning" style="display:none;background:#fef3e2;border:1px solid #f6d38a;border-radius:8px;padding:8px 12px;font-size:12px;color:#92400e;margin-bottom:14px">
+    <i class="ti ti-alert-triangle"></i> <b>Category កំពុងជ្រើសរើស</b> — User នឹងឃើញ <b>Item ទាំងអស់</b> ក្នុង Category នេះ (ការជ្រើសរើស Item ជាក់លាក់ខាងស្តាំ <b>នឹងគ្មានប្រយោជន៍ទេ</b> លុះត្រាតែ Uncheck Category ចេញសិន ដើម្បីកម្រិតឱ្យឃើញតែ Item ជាក់លាក់)
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div>
       <div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:8px;display:flex;align-items:center;gap:6px">
         <i class="ti ti-folder"></i> Category
-        <button onclick="CATS.forEach(c=>document.getElementById('vc-cat-'+c.replace(/[^a-z0-9]/gi,'')).checked=true)" class="btn btn-xs" style="margin-left:auto;font-size:10px">ទាំងអស់</button>
-        <button onclick="CATS.forEach(c=>document.getElementById('vc-cat-'+c.replace(/[^a-z0-9]/gi,'')).checked=false)" class="btn btn-xs" style="font-size:10px">Clear</button>
+        <button onclick="visSelectAllCats(true)" class="btn btn-xs" style="margin-left:auto;font-size:10px">ទាំងអស់</button>
+        <button onclick="visSelectAllCats(false)" class="btn btn-xs" style="font-size:10px">Clear</button>
       </div>
-      <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">${catChecks}</div>
+      <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px" id="vc-cat-list">${catChecks}</div>
     </div>
     <div>
       <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px;display:flex;align-items:center;gap:6px">
         <i class="ti ti-package"></i> Items ជាក់លាក់
-        <button onclick="allItems.forEach(i=>document.getElementById('vc-item-'+i.code).checked=true)" class="btn btn-xs" style="margin-left:auto;font-size:10px">ទាំងអស់</button>
-        <button onclick="allItems.forEach(i=>document.getElementById('vc-item-'+i.code).checked=false)" class="btn btn-xs" style="font-size:10px">Clear</button>
+        <button onclick="visSelectAllVisibleItems(true)" class="btn btn-xs" style="margin-left:auto;font-size:10px" title="ជ្រើសទាំងអស់ក្នុងបញ្ជីបច្ចុប្បន្ន">ដែលឃើញទាំងអស់</button>
+        <button onclick="visSelectAllVisibleItems(false)" class="btn btn-xs" style="font-size:10px">Clear</button>
       </div>
-      <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">${itemChecks}</div>
+      <input type="text" id="vc-item-search" placeholder="🔍 ស្វែងរក Code ឬ ឈ្មោះ..." oninput="renderVisItemsList()" style="width:100%;margin-bottom:8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;box-sizing:border-box">
+      <div style="max-height:246px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px" id="vc-item-list"></div>
     </div>
   </div>
   <div class="modal-footer">
@@ -8883,22 +9301,74 @@ async function openVisibilityEdit(userId,userName){
     <button class="btn btn-danger btn-sm" onclick="clearUserVisibility('${userId}')"><i class="ti ti-trash"></i> Clear All</button>
     <button class="btn btn-primary" onclick="saveUserVisibility('${userId}')"><i class="ti ti-device-floppy"></i> Save</button>
   </div>`);
+  renderVisItemsList();
+  updateVisCatWarning();
+}
+
+function updateVisCatWarning(){
+  let w=document.getElementById('vc-cat-warning');
+  if(w)w.style.display=_visSelectedCats.size>0?'block':'none';
+}
+
+function onVisCatToggle(el){
+  if(el.checked)_visSelectedCats.add(el.value);
+  else _visSelectedCats.delete(el.value);
+  el.closest('label').style.background=el.checked?'#e8f0fb':'';
+  el.nextElementSibling.style.fontWeight=el.checked?'600':'400';
+  renderVisItemsList();
+  updateVisCatWarning();
+}
+
+function visSelectAllCats(checked){
+  document.querySelectorAll('.vc-cat-chk').forEach(el=>{
+    el.checked=checked;
+    if(checked)_visSelectedCats.add(el.value);else _visSelectedCats.delete(el.value);
+    el.closest('label').style.background=checked?'#e8f0fb':'';
+    el.nextElementSibling.style.fontWeight=checked?'600':'400';
+  });
+  renderVisItemsList();
+  updateVisCatWarning();
+}
+
+function renderVisItemsList(){
+  let listEl=document.getElementById('vc-item-list');
+  if(!listEl)return;
+  let search=(document.getElementById('vc-item-search')?.value||'').trim().toLowerCase();
+  let items=allItems;
+  // Filter to selected categories first (if any are checked)
+  if(_visSelectedCats.size>0)items=items.filter(i=>_visSelectedCats.has(i.category));
+  // Then apply search text on top
+  if(search)items=items.filter(i=>(i.code+i.name).toLowerCase().includes(search));
+  let total=items.length;
+  let display=items.slice(0,150);
+  listEl.innerHTML=(display.length?display.map(i=>`
+    <label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;background:${_visSelectedItems.has(i.code)?'#eaf3de':''}">
+      <input type="checkbox" class="vc-item-chk" value="${i.code}" ${_visSelectedItems.has(i.code)?'checked':''} onchange="onVisItemToggle(this)" style="width:16px;height:16px;cursor:pointer">
+      <span style="font-size:12px"><code style="font-size:11px">${i.code}</code> ${i.name}</span>
+    </label>`).join(''):'<div class="empty" style="padding:20px">គ្មាន Item ត្រូវនឹងលក្ខខណ្ឌ</div>')
+    +(total>150?`<div style="text-align:center;padding:8px;font-size:11px;color:var(--muted)">បង្ហាញ 150/${total} — សូម Search ដើម្បីរកឱ្យតូចជាង</div>`:'');
+}
+
+function onVisItemToggle(el){
+  if(el.checked)_visSelectedItems.add(el.value);
+  else _visSelectedItems.delete(el.value);
+  el.closest('label').style.background=el.checked?'#eaf3de':'';
+}
+
+function visSelectAllVisibleItems(checked){
+  document.querySelectorAll('.vc-item-chk').forEach(el=>{
+    el.checked=checked;
+    if(checked)_visSelectedItems.add(el.value);else _visSelectedItems.delete(el.value);
+    el.closest('label').style.background=checked?'#eaf3de':'';
+  });
 }
 
 async function saveUserVisibility(userId){
   // Delete existing for this user
   await db.from('user_item_visibility').delete().eq('user_id',userId);
   let toInsert=[];
-  // Collect selected categories
-  CATS.forEach(c=>{
-    let el=document.getElementById('vc-cat-'+c.replace(/[^a-z0-9]/gi,''));
-    if(el&&el.checked)toInsert.push({user_id:userId,visibility_type:'category',category:c,item_code:null});
-  });
-  // Collect selected items
-  allItems.forEach(i=>{
-    let el=document.getElementById('vc-item-'+i.code);
-    if(el&&el.checked)toInsert.push({user_id:userId,visibility_type:'item',category:null,item_code:i.code});
-  });
+  _visSelectedCats.forEach(c=>toInsert.push({user_id:userId,visibility_type:'category',category:c,item_code:null}));
+  _visSelectedItems.forEach(code=>toInsert.push({user_id:userId,visibility_type:'item',category:null,item_code:code}));
   if(toInsert.length)await db.from('user_item_visibility').insert(toInsert);
   closeModal();
   await loadVisibility();
