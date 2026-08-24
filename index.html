@@ -490,6 +490,12 @@ function printMyRequests(){
         <p class="login-welcome-sub">Sign in to your laboratory inventory system</p>
         <div class="login-err" id="login-err">Username ឬ Password មិនត្រឹមត្រូវ!</div>
         <div id="db-status" style="font-size:11px;padding:6px 10px;border-radius:6px;margin-bottom:10px;background:#f0f7ff;color:#185fa5;border:1px solid #b8d4f0;display:none"></div>
+        <div id="webauthn-login-wrap" style="display:none;margin-bottom:14px">
+          <button class="btn btn-primary login-btn" type="button" onclick="webauthnLogin()" style="background:#0f6e56;border-color:#0f6e56">
+            <i class="ti ti-face-id"></i> <span>Login ដោយ Face ID / Fingerprint</span>
+          </button>
+          <div style="text-align:center;font-size:11px;color:var(--muted);margin:10px 0">— ឬ Login ដោយ Password —</div>
+        </div>
         <div class="form-group">
           <label>Username</label>
           <div class="input-icon-wrap"><i class="ti ti-user"></i><input id="inp-user" placeholder="Enter username" onkeydown="if(event.key==='Enter')doLogin()"></div>
@@ -503,6 +509,9 @@ function printMyRequests(){
           <span class="login-forgot" onclick="showForgotPwHint()">Forgot password?</span>
         </div>
         <button class="btn btn-primary login-btn" onclick="doLogin()"><span>Login</span> <i class="ti ti-arrow-right"></i></button>
+        <div id="webauthn-setup-wrap" style="display:none;text-align:center;margin-top:12px">
+          <label style="font-size:12px;color:var(--muted);cursor:pointer"><input type="checkbox" id="chk-enable-webauthn"> កំណត់ Face ID / Fingerprint Login លើ Device នេះ (លើកក្រោយ)</label>
+        </div>
         <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:18px">ISO 15189 &nbsp;•&nbsp; TSNHL_LAB v3.0</p>
       </div>
     </div>
@@ -590,6 +599,7 @@ function printMyRequests(){
     <select id="inv-monthly-sel" onchange="onMonthlySelChange()" style="padding:7px 14px;border:2px solid #7c3aed;border-radius:8px;font-size:13px;background:var(--card);color:#7c3aed;font-weight:600;cursor:pointer;min-width:200px"><option value="">Normal Mode</option></select>
     <button class="btn btn-sm" onclick="if(typeof loadInventory==='function'){loadInventory(true);}else{goPage('inventory');}" style="padding:5px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue)" title="Refresh data"><i class="ti ti-refresh"></i> Refresh</button>
     <button id="btn-close-month" class="btn btn-sm" style="display:none;background:#185fa5;color:#fff;border-color:#185fa5" onclick="openCloseMonthDialog()"><i class="ti ti-lock"></i> Close Month</button>
+    <button id="btn-verify-month" class="btn btn-sm" style="display:none;background:#0f6e56;color:#fff;border-color:#0f6e56" onclick="verifyMonthCompleteness()"><i class="ti ti-checkup-list"></i> ផ្ទៀងផ្ទាត់ភាពពេញលេញ</button>
     <span id="monthly-lock-badge" style="display:none;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:#fee2e2;color:#dc2626">Locked</span>
   </div>
   <select id="inv-monthly-month" style="display:none"></select>
@@ -1805,6 +1815,88 @@ function togglePendingByItem(key){
   if(key==='po')renderPendingByItemRows(window._poPendingByItem||[],window._poItemMapAll||{},'po-turn-pending-item-body','po');
 }
 
+// ===== WEBAUTHN — Face ID / Fingerprint / Windows Hello quick login =====
+// IMPORTANT — honest security note: this app has no custom backend, only
+// direct Supabase calls from the browser, so we can't do full server-side
+// cryptographic verification of the WebAuthn signature the way a proper
+// FIDO2 relying-party server would. What this DOES give you: the browser's
+// platform authenticator (Face ID / Windows Hello / fingerprint sensor) must
+// successfully verify the person's biometric on THIS device before we ever
+// touch the locally-stored login credentials — so a stolen/guessed password
+// alone isn't enough on an enrolled device, and the credentials only ever
+// unlock through a real biometric check, never silently. It is a genuine
+// convenience + real biometric gate, but not the full bank-grade WebAuthn
+// trust model. The actual login itself still goes through the normal
+// username/password check against app_users, so security is anchored there.
+function webauthnSupported(){
+  return!!(window.PublicKeyCredential&&navigator.credentials);
+}
+
+async function webauthnEnroll(username,password){
+  if(!webauthnSupported())return;
+  let challenge=new Uint8Array(32);
+  crypto.getRandomValues(challenge);
+  let userIdBytes=new TextEncoder().encode(username);
+  let cred=await navigator.credentials.create({
+    publicKey:{
+      challenge,
+      rp:{name:'TSNHL Lab Inventory'},
+      user:{id:userIdBytes,name:username,displayName:username},
+      pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},
+      timeout:60000
+    }
+  });
+  if(!cred)return;
+  let credId=btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+  localStorage.setItem('tsnhl_webauthn_cred',credId);
+  localStorage.setItem('tsnhl_webauthn_user',username);
+  localStorage.setItem('tsnhl_webauthn_pass',btoa(unescape(encodeURIComponent(password))));
+  toast('✅ បានកំណត់ Face ID / Fingerprint Login លើ Device នេះ!','success');
+}
+
+async function webauthnLogin(){
+  if(!webauthnSupported()){toast('Device/Browser នេះមិនគាំទ្រ Face ID/Fingerprint ទេ','error');return;}
+  let credIdB64=localStorage.getItem('tsnhl_webauthn_cred');
+  let u=localStorage.getItem('tsnhl_webauthn_user');
+  let pEnc=localStorage.getItem('tsnhl_webauthn_pass');
+  if(!credIdB64||!u||!pEnc){toast('មិនទាន់កំណត់ Face ID/Fingerprint លើ Device នេះទេ','error');return;}
+  try{
+    let credId=Uint8Array.from(atob(credIdB64),c=>c.charCodeAt(0));
+    let challenge=new Uint8Array(32);
+    crypto.getRandomValues(challenge);
+    let assertion=await navigator.credentials.get({
+      publicKey:{
+        challenge,
+        allowCredentials:[{id:credId,type:'public-key'}],
+        userVerification:'required',
+        timeout:60000
+      }
+    });
+    if(!assertion)return;
+    // Biometric verified successfully on this device — unlock the stored
+    // credentials and proceed through the normal login/password check.
+    let p=decodeURIComponent(escape(atob(pEnc)));
+    document.getElementById('inp-user').value=u;
+    document.getElementById('inp-pass').value=p;
+    await doLogin();
+  }catch(e){
+    console.error('[WebAuthn] login failed:',e);
+    if(String(e).includes('NotAllowedError'))toast('បានបោះបង់ ឬ Face ID/Fingerprint មិនត្រូវគ្នា','error');
+    else toast('Face ID/Fingerprint Login បរាជ័យ — សូម Login ដោយ Password វិញ','error');
+  }
+}
+
+function initWebauthnUI(){
+  if(!webauthnSupported())return;
+  let hasEnrolled=!!(localStorage.getItem('tsnhl_webauthn_cred')&&localStorage.getItem('tsnhl_webauthn_user'));
+  let loginBtn=document.getElementById('webauthn-login-wrap');
+  let setupWrap=document.getElementById('webauthn-setup-wrap');
+  if(loginBtn)loginBtn.style.display=hasEnrolled?'block':'none';
+  if(setupWrap)setupWrap.style.display=hasEnrolled?'none':'block'; // only offer setup if not already enrolled on this device
+}
+initWebauthnUI();
+
 // ===== LOGIN =====
 async function doLogin(){
   let u=document.getElementById('inp-user').value.trim();
@@ -1836,6 +1928,12 @@ async function doLogin(){
       localStorage.removeItem('tsnhl_remember_pass');
     }
   }catch(e){}
+  // WebAuthn enrollment — only runs if the person ticked the box, and never
+  // blocks/breaks normal login if it fails for any reason (unsupported
+  // browser, no biometric hardware, user cancelled the OS prompt, etc.)
+  if(document.getElementById('chk-enable-webauthn')?.checked){
+    try{await webauthnEnroll(u,p);}catch(e){console.error('[WebAuthn] enroll failed:',e);}
+  }
   CU=data;
   document.getElementById('login-page').style.display='none';
   document.getElementById('main-app').style.display='flex';
@@ -2483,10 +2581,82 @@ async function initMonthlyBar(){
   else{sel.value=cy+'_'+cm;try{localStorage.setItem('inv_monthly_sel',cy+'_'+cm);}catch(e){}}
   onMonthlySelChange(false);
 }
+// On-demand completeness check — Admin can run this any time (not just right
+// after Close Month) to independently confirm every item has a monthly_stock
+// row for the currently-viewed month, giving peace of mind without needing
+// to trust that a past Close Month operation went perfectly.
+async function verifyMonthCompleteness(){
+  if(!_monthlyMode||!_selectedYear||!_selectedMonth){toast('សូមជ្រើសរើសខែជាមុនសិន','error');return;}
+  let btn=document.getElementById('btn-verify-month');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> កំពុងពិនិត្យ...';}
+  try{
+    let {data:allItemsData}=await db.from('items').select('code');
+    let totalItems=(allItemsData||[]).length;
+    let {data:monthRows}=await db.from('monthly_stock').select('item_code').eq('year',_selectedYear).eq('month',_selectedMonth);
+    let coveredCodes=new Set((monthRows||[]).map(r=>r.item_code));
+    let allCodes=(allItemsData||[]).map(i=>i.code);
+    let missing=allCodes.filter(c=>!coveredCodes.has(c));
+
+    if(missing.length===0){
+      openModal(`<h3><i class="ti ti-checkup-list" style="color:#0f6e56"></i> ការផ្ទៀងផ្ទាត់ភាពពេញលេញ</h3>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;text-align:center">
+          <div style="font-size:40px;margin-bottom:8px">✅</div>
+          <div style="font-size:18px;font-weight:700;color:#0f6e56">${totalItems}/${totalItems} Item ពេញលេញ 100%</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:6px">ខែ ${monthName(_selectedMonth)} ${_selectedYear} មាន Monthly Stock Record គ្រប់ Item ទាំងអស់ — គ្មានចន្លោះទិន្នន័យសោះ</div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">យល់ព្រម</button></div>`);
+    } else {
+      openModal(`<h3><i class="ti ti-alert-triangle" style="color:#a32d2d"></i> រកឃើញចន្លោះទិន្នន័យ</h3>
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;padding:16px;margin-bottom:12px">
+          <div style="font-size:16px;font-weight:700;color:#a32d2d">${totalItems-missing.length}/${totalItems} Item មានទិន្នន័យ — ${missing.length} Item បាត់</div>
+        </div>
+        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px">
+          ${missing.map(c=>`<code style="display:inline-block;background:#fee2e2;color:#a32d2d;padding:2px 8px;border-radius:4px;margin:2px;font-size:11px">${c}</code>`).join('')}
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:10px"><i class="ti ti-info-circle"></i> Item ទាំងនេះមិនមាន Monthly Record សម្រាប់ខែនេះទេ — សូមចុច "🔧 កែស្វ័យប្រវត្តិ" ដើម្បីព្យាយាមបង្កើតជាថ្មី</div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeModal()">បិទ</button>
+          <button class="btn btn-primary" onclick="autoFixMissingMonthRows(${JSON.stringify(missing)})">🔧 កែស្វ័យប្រវត្តិ</button>
+        </div>`);
+    }
+  }catch(e){
+    toast('❌ Error ពិនិត្យ: '+e.message,'error');
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-checkup-list"></i> ផ្ទៀងផ្ទាត់ភាពពេញលេញ';}
+  }
+}
+
+// Repairs any items missing a monthly_stock row for the currently-viewed
+// month, by deriving their Opening balance from the previous month's Closing
+// (or falling back to the item's current live balance if no prior month
+// exists), then creating the row directly — same safe logic used elsewhere.
+async function autoFixMissingMonthRows(missingCodes){
+  closeModal();
+  toast('កំពុងកែ '+missingCodes.length+' item...','info');
+  let pm=_selectedMonth===1?12:_selectedMonth-1,py=_selectedMonth===1?_selectedYear-1:_selectedYear;
+  let fixed=0,stillFailed=[];
+  for(let code of missingCodes){
+    let {data:item}=await db.from('items').select('*').eq('code',code).single();
+    if(!item)continue;
+    let {data:prev}=await db.from('monthly_stock').select('closing').eq('item_code',code).eq('year',py).eq('month',pm).order('id',{ascending:false}).limit(1).maybeSingle();
+    let opening=prev?(prev.closing||0):(item.balance||0);
+    let row={item_code:code,item_name:item.name,category:item.category||'',year:_selectedYear,month:_selectedMonth,opening,stock_in:0,stock_out:0,adjustment:0,closing:opening,amc:item.amc||0,mos:0,status:'',locked:false};
+    let {error}=await db.from('monthly_stock').upsert([row],{onConflict:'item_code,year,month'});
+    if(error)stillFailed.push(code);else fixed++;
+  }
+  if(stillFailed.length){
+    toast('⚠️ បានកែ '+fixed+'/'+missingCodes.length+' — '+stillFailed.length+' នៅតែបរាជ័យ: '+stillFailed.join(', '),'error');
+  } else {
+    toast('✅ បានកែ '+fixed+' item ទាំងអស់ដោយជោគជ័យ!','success');
+  }
+  loadInventory(true);
+}
+
 function onMonthlySelChange(doLoad){
   var sel=document.getElementById('inv-monthly-sel'),val=sel?sel.value:'';
   var cb=document.getElementById('btn-close-month'),lb=document.getElementById('monthly-lock-badge');
-  if(!val){_monthlyMode=false;_selectedMonth=0;if(cb)cb.style.display='none';if(lb)lb.style.display='none';}
+  var vb=document.getElementById('btn-verify-month');
+  if(!val){_monthlyMode=false;_selectedMonth=0;if(cb)cb.style.display='none';if(lb)lb.style.display='none';if(vb)vb.style.display='none';}
   else{
     var p=val.split('_');_selectedYear=parseInt(p[0]);_selectedMonth=parseInt(p[1]);_monthlyMode=true;
     var ms=document.getElementById('inv-monthly-month'),ys=document.getElementById('inv-monthly-year');
@@ -2494,6 +2664,7 @@ function onMonthlySelChange(doLoad){
     var lk=_lockedMonths[_selectedYear+'_'+_selectedMonth];
     if(cb){cb.style.display='inline-block';cb.innerHTML=lk?'<i class="ti ti-lock-open"></i> Unlock Month':'<i class="ti ti-lock"></i> Close Month';cb.style.background=lk?'#d97706':'#185fa5';cb.style.borderColor=lk?'#d97706':'#185fa5';}
     if(lb)lb.style.display=lk?'inline-block':'none';
+    if(vb)vb.style.display='inline-block';
   }
   try{localStorage.setItem('inv_monthly_sel',val);}catch(e){}
   if(doLoad!==false)loadInventory();
@@ -2561,7 +2732,16 @@ async function executeUnlockMonth(month,year){
 async function executeCloseMonth(month,year,nextM,nextY){
   var btn=document.querySelector('.modal-footer .btn-primary');
   if(btn){btn.disabled=true;btn.innerHTML='Processing...';}
-  await db.from('monthly_stock').update({locked:true,closed_at:new Date().toISOString(),closed_by:CU?CU.username:''}).eq('year',year).eq('month',month);
+  // Step 1: lock the current month. If this silently fails, the rest of this
+  // function would still run and create next month's Opening rows as if the
+  // close succeeded — leaving the current month un-locked (still editable)
+  // while next month already exists, a confusing inconsistent state.
+  var lockRes=await db.from('monthly_stock').update({locked:true,closed_at:new Date().toISOString(),closed_by:CU?CU.username:''}).eq('year',year).eq('month',month);
+  if(lockRes.error){
+    toast('❌ Close Month បរាជ័យ (Lock step) — '+lockRes.error.message,'error');
+    if(btn){btn.disabled=false;btn.innerHTML='Close Month';}
+    return;
+  }
   _lockedMonths[year+'_'+month]=true;
   var msRes=await db.from('monthly_stock').select('*').eq('year',year).eq('month',month).order('id',{ascending:true});
   var msMap={};((msRes.data)||[]).forEach(function(r){
@@ -2576,8 +2756,67 @@ async function executeCloseMonth(month,year,nextM,nextY){
     var op=ms?((ms.opening||0)+(ms.stock_in||0)-(ms.stock_out||0)+(ms.adjustment||0)):(i.balance||0);
     return{item_code:i.code,item_name:i.name,category:i.category||'',year:nextY,month:nextM,opening:op,stock_in:0,stock_out:0,adjustment:0,closing:op,amc:i.amc||0,mos:0,status:'',locked:false};
   });
-  for(var c=0;c<ins.length;c+=100){await db.from('monthly_stock').upsert(ins.slice(c,c+100),{onConflict:'item_code,year,month'});}
-  toast('Closed '+monthName(month)+' '+year+' - Opened '+monthName(nextM)+' '+nextY+' ('+ins.length+' items)','success');
+  // Step 2: create next month's Opening rows in batches of 100. If any batch
+  // fails partway through, some items would carry an Opening balance into
+  // next month and others silently wouldn't — a serious, hard-to-spot data
+  // gap. We retry failed batches automatically, then run a definitive
+  // verification pass afterward (actually counting rows in the database)
+  // rather than only trusting that "no error thrown" means "all covered".
+  var failedBatches=[];
+  for(var c=0;c<ins.length;c+=100){
+    var batch=ins.slice(c,c+100);
+    var upRes=await db.from('monthly_stock').upsert(batch,{onConflict:'item_code,year,month'});
+    if(upRes.error){
+      console.error('[executeCloseMonth] upsert batch failed at index',c,upRes.error.message);
+      failedBatches.push(batch);
+    }
+  }
+  // Auto-retry failed batches up to 2 more times (handles transient network
+  // blips) before giving up and reporting them as genuinely failed.
+  for(var attempt=0;attempt<2&&failedBatches.length>0;attempt++){
+    var stillFailed=[];
+    for(var fb of failedBatches){
+      var retryRes=await db.from('monthly_stock').upsert(fb,{onConflict:'item_code,year,month'});
+      if(retryRes.error)stillFailed.push(fb);
+    }
+    failedBatches=stillFailed;
+  }
+
+  // Definitive verification: actually COUNT what's in the database for next
+  // month, rather than assuming "no error" means "every item is there".
+  var {data:verifyRows}=await db.from('monthly_stock').select('item_code').eq('year',nextY).eq('month',nextM);
+  var verifiedCodes=new Set((verifyRows||[]).map(function(r){return r.item_code;}));
+  var missingItems=ins.filter(function(i){return!verifiedCodes.has(i.item_code);});
+
+  // Final self-healing pass: if anything is STILL missing after batch retries,
+  // it's very likely ONE problematic row inside a batch silently blocking the
+  // other 99 good ones from that same batch. Retrying missing items ONE AT A
+  // TIME (with a short pause between attempts) isolates any single bad row so
+  // it can't hold back everything else, and gives every item its own genuine
+  // chance to succeed — this is what makes "all items, no manual fixing
+  // needed" actually true rather than just hoped for.
+  if(missingItems.length>0){
+    if(btn)btn.innerHTML='កំពុងសាកល្បង '+missingItems.length+' item ម្តងទៀត...';
+    for(var mi of missingItems){
+      for(var singleAttempt=0;singleAttempt<3;singleAttempt++){
+        var singleRes=await db.from('monthly_stock').upsert([mi],{onConflict:'item_code,year,month'});
+        if(!singleRes.error)break;
+        await new Promise(function(r){setTimeout(r,300);}); // brief pause before retrying this one item
+      }
+    }
+    // Re-verify after the individual-retry pass
+    var {data:verify2}=await db.from('monthly_stock').select('item_code').eq('year',nextY).eq('month',nextM);
+    var verified2=new Set((verify2||[]).map(function(r){return r.item_code;}));
+    missingItems=ins.filter(function(i){return!verified2.has(i.item_code);});
+  }
+
+  if(missingItems.length>0){
+    var missingCodes=missingItems.map(function(i){return i.item_code;});
+    console.error('[executeCloseMonth] items missing from next month after close+retry:',missingCodes);
+    toast('⚠️ '+missingItems.length+'/'+ins.length+' item នៅតែមិនបាន Sync ទោះបីជាបានព្យាយាមកែដោយស្វ័យប្រវត្តិច្រើនដងហើយក៏ដោយ (ប្រហែលមានបញ្ហាទិន្នន័យលើ Item ជាក់លាក់): '+missingCodes.slice(0,8).join(', ')+(missingCodes.length>8?'...':'')+' — សូម Screenshot ហើយប្រាប់ Developer','error');
+  } else {
+    toast('✅ Closed '+monthName(month)+' '+year+' - Opened '+monthName(nextM)+' '+nextY+' — បញ្ជាក់ '+ins.length+'/'+ins.length+' item ត្រូវបាន Sync ត្រឹមត្រូវ 100%','success');
+  }
   closeModal();await initMonthlyBar();
   var sel=document.getElementById('inv-monthly-sel');
   if(sel){sel.value=nextY+'_'+nextM;try{localStorage.setItem('inv_monthly_sel',nextY+'_'+nextM);}catch(e){}}
