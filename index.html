@@ -8354,9 +8354,9 @@ async function openStockInFromPO(poId, poNo){
     </button>
     <div style="display:inline-flex;align-items:center;gap:4px;margin:0 4px;font-size:12px;color:var(--muted)">
       <label style="white-space:nowrap">ទំហំ Label:</label>
-      <input type="number" id="label-w-mm" value="${localStorage.getItem('label_w_mm')||'50'}" min="10" max="200" style="width:52px;padding:5px 6px;font-size:12px" title="Width (mm)">
+      <input type="number" id="label-w-mm" value="${localStorage.getItem('label_w_mm')||'50.8'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Width (mm)">
       <span>×</span>
-      <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25'}" min="10" max="200" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
+      <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
       <span>mm</span>
     </div>
     <button class="btn" onclick="printPOBarcodes('${poId}','${poNo}',${ritems.length})" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
@@ -8684,12 +8684,13 @@ async function printPOBarcodes(poId, poNo, count){
     .label-used{border-top:0.5px dashed #bbb;padding-top:0.5mm;font-size:${usedSize}pt;color:#555}
     .barcode-error{font-size:${codeSize}pt;font-weight:700;letter-spacing:2px;padding:2mm 0;color:#222;font-family:monospace}
     @media print{
+      @page{size:${labelW}mm ${labelH}mm;margin:0}
       body{margin:0}
       .no-print{display:none}
-      .labels{gap:2mm}
-      .label{border:0.5px solid #999}
+      .labels{display:block;gap:0}
+      .label{border:none;width:${labelW}mm;height:${labelH}mm;margin:0;page-break-after:always;page-break-inside:avoid}
+      .label:last-child{page-break-after:auto}
     }
-    @media print{body{margin:0}.no-print{display:none}}
   </style></head><body>
   <div class="no-print" style="margin-bottom:10px">
     <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
