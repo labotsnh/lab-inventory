@@ -1752,6 +1752,24 @@ let reportCache={in:[],out:[]};
 // Request approval, Expiry countdown) to record/calculate against the wrong day.
 function today(){return new Date();}
 function fd(d){if(!d)return '-';let dt=new Date(d);return isNaN(dt)?d:dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})}
+// Initials shown as "Receive by" on printed labels (ISO 15189 traceability —
+// who physically received/verified the item). Defaults to a best-effort guess
+// from the logged-in user's full name, but is editable per print run (small
+// input next to the label size boxes) and remembered per-user after that.
+function getUserInitials(){
+  try{
+    let saved=localStorage.getItem('label_initials_'+(CU?.id||CU?.username||''));
+    if(saved)return saved;
+  }catch(e){}
+  let name=(CU?.full_name||CU?.username||'').trim();
+  if(!name)return '';
+  let parts=name.split(/\s+/).filter(Boolean);
+  if(parts.length>=2)return (parts[0][0]+parts[1][0]).toUpperCase();
+  return name.substring(0,2).toUpperCase();
+}
+function setUserInitials(v){
+  try{localStorage.setItem('label_initials_'+(CU?.id||CU?.username||''),(v||'').toUpperCase());}catch(e){}
+}
 function daysDiff(exp){if(!exp)return 9999;return Math.floor((new Date(exp)-today())/86400000)}
 function srcBadge(s){let m={TSNH:'tsnh',CMS:'cms',Free:'free'};let c=m[s]||(String(s).includes('លទ្ធ')?'ldth':'tsnh');return`<span class="badge badge-${c}">${s||''}</span>`}
 function calcItemMOS(i){
@@ -8467,6 +8485,8 @@ async function openStockInFromPO(poId, poNo){
       <span>×</span>
       <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
       <span>mm</span>
+      <label style="white-space:nowrap;margin-left:6px">Receive by:</label>
+      <input type="text" id="label-initials" value="${getUserInitials()}" maxlength="6" style="width:52px;padding:5px 6px;font-size:12px;text-transform:uppercase" title="អក្សរកាត់ (Initials) បង្ហាញលើ Label">
     </div>
     <button class="btn" onclick="printPOBarcodes('${poId}','${poNo}',${ritems.length})" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
       <i class="ti ti-barcode"></i> Print Barcodes
@@ -8741,6 +8761,8 @@ function openBatchLabelModal(){
         <span>×</span>
         <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
         <span>mm</span>
+        <label style="white-space:nowrap;margin-left:6px">Receive by:</label>
+        <input type="text" id="label-initials" value="${getUserInitials()}" maxlength="6" style="width:52px;padding:5px 6px;font-size:12px;text-transform:uppercase" title="អក្សរកាត់ (Initials) បង្ហាញលើ Label">
       </div>
       <button class="btn" onclick="printBatchLabels()" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
         <i class="ti ti-barcode"></i> Print Barcodes
@@ -8757,7 +8779,9 @@ function printBatchLabels(){
   let nameSize=(5*scale).toFixed(1);
   let infoSize=(4.5*scale).toFixed(1);
   let usedSize=(4*scale).toFixed(1);
-  let barcodeW=Math.max(labelW-4,10).toFixed(1);
+  let receiveBy=(document.getElementById('label-initials')?.value||getUserInitials()).trim().toUpperCase();
+  if(receiveBy)setUserInitials(receiveBy);
+  let barcodeW=Math.max(labelW-6,10).toFixed(1);
   let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
   let nameMaxH=(labelH*0.32).toFixed(1);
 
@@ -8787,12 +8811,12 @@ function printBatchLabels(){
     <div class="label">
       ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
       ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
-      <div class="label-inner" style="margin-left:${b.supplier?'3mm':'0'};margin-right:${b.source?'3mm':'0'}">
+      <div class="label-inner" style="margin-left:${b.supplier?'4mm':'0'};margin-right:${b.source?'4mm':'0'}">
         <div class="label-code">${b.code}</div>
         <div class="label-name">${b.name}</div>
         <svg class="barcode" data-code="${b.code}"></svg>
         <div class="label-info">
-          <div><b>Date Receive:</b> ${fd(b.datein)}</div>
+          <div><b>Date Receive:</b> ${fd(b.datein)} <b style="margin-left:5px">By:</b> ${receiveBy}</div>
           <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
         </div>
       </div>
@@ -8806,10 +8830,10 @@ function printBatchLabels(){
     body{font-family:Arial,sans-serif;background:#fff;margin:10px}
     .labels{display:flex;flex-wrap:wrap;gap:3mm}
     .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
-    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
-    .label-supplier-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
-    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
-    .label-source-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
     .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
     .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
     .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
@@ -8880,6 +8904,8 @@ function printSingleHistLabel(id){
         <span>×</span>
         <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
         <span>mm</span>
+        <label style="white-space:nowrap;margin-left:6px">Receive by:</label>
+        <input type="text" id="label-initials" value="${getUserInitials()}" maxlength="6" style="width:52px;padding:5px 6px;font-size:12px;text-transform:uppercase" title="អក្សរកាត់ (Initials) បង្ហាញលើ Label">
       </div>
       <button class="btn" onclick="printHistLabelConfirm('${id}')" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
         <i class="ti ti-barcode"></i> Print Barcodes
@@ -8900,7 +8926,9 @@ function printHistLabelConfirm(id){
   let nameSize=(5*scale).toFixed(1);
   let infoSize=(4.5*scale).toFixed(1);
   let usedSize=(4*scale).toFixed(1);
-  let barcodeW=Math.max(labelW-4,10).toFixed(1);
+  let receiveBy=(document.getElementById('label-initials')?.value||getUserInitials()).trim().toUpperCase();
+  if(receiveBy)setUserInitials(receiveBy);
+  let barcodeW=Math.max(labelW-6,10).toFixed(1);
   let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
   let nameMaxH=(labelH*0.32).toFixed(1);
 
@@ -8919,12 +8947,12 @@ function printHistLabelConfirm(id){
     <div class="label">
       ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
       ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
-      <div class="label-inner" style="margin-left:${b.supplier?'3mm':'0'};margin-right:${b.source?'3mm':'0'}">
+      <div class="label-inner" style="margin-left:${b.supplier?'4mm':'0'};margin-right:${b.source?'4mm':'0'}">
         <div class="label-code">${b.code}</div>
         <div class="label-name">${b.name}</div>
         <svg class="barcode" data-code="${b.code}"></svg>
         <div class="label-info">
-          <div><b>Date Receive:</b> ${fd(b.datein)}</div>
+          <div><b>Date Receive:</b> ${fd(b.datein)} <b style="margin-left:5px">By:</b> ${receiveBy}</div>
           <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
         </div>
       </div>
@@ -8939,10 +8967,10 @@ function printHistLabelConfirm(id){
     body{font-family:Arial,sans-serif;background:#fff;margin:10px}
     .labels{display:flex;flex-wrap:wrap;gap:3mm}
     .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
-    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
-    .label-supplier-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
-    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
-    .label-source-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
     .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
     .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
     .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
@@ -9003,7 +9031,9 @@ async function printPOBarcodes(poId, poNo, count){
   let nameSize=(5*scale).toFixed(1);
   let infoSize=(4.5*scale).toFixed(1);
   let usedSize=(4*scale).toFixed(1);
-  let barcodeW=Math.max(labelW-4,10).toFixed(1);
+  let receiveBy=(document.getElementById('label-initials')?.value||getUserInitials()).trim().toUpperCase();
+  if(receiveBy)setUserInitials(receiveBy);
+  let barcodeW=Math.max(labelW-6,10).toFixed(1);
   let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
   let nameMaxH=(labelH*0.32).toFixed(1);
 
@@ -9050,12 +9080,12 @@ async function printPOBarcodes(poId, poNo, count){
     <div class="label">
       ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
       ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
-      <div class="label-inner" style="margin-left:${b.supplier?'3mm':'0'};margin-right:${b.source?'3mm':'0'}">
+      <div class="label-inner" style="margin-left:${b.supplier?'4mm':'0'};margin-right:${b.source?'4mm':'0'}">
         <div class="label-code">${b.code}</div>
         <div class="label-name">${b.name}</div>
         <svg class="barcode" data-code="${b.code}"></svg>
         <div class="label-info">
-          <div><b>Date Receive:</b> ${fd(b.datein)}</div>
+          <div><b>Date Receive:</b> ${fd(b.datein)} <b style="margin-left:5px">By:</b> ${receiveBy}</div>
           <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
         </div>
       </div>
@@ -9071,10 +9101,10 @@ async function printPOBarcodes(poId, poNo, count){
     body{font-family:Arial,sans-serif;background:#fff}
     .labels{display:flex;flex-wrap:wrap;gap:3mm}
     .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
-    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
-    .label-supplier-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
-    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
-    .label-source-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
     .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
     .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
     .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
