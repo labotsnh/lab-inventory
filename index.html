@@ -616,6 +616,7 @@ function printMyRequests(){
     <div style="display:flex;gap:8px">
       <button class="btn" onclick="printStockIn()"><i class="ti ti-printer"></i> Print</button>
       <button class="btn btn-success" onclick="exportStockInExcel()"><i class="ti ti-file-spreadsheet"></i> Export Excel</button>
+      <button class="btn" onclick="downloadStockInTemplate()" title="ទាញយក Excel Template សម្រាប់ Upload"><i class="ti ti-download"></i> Download Template</button>
       <label class="btn" style="cursor:pointer"><i class="ti ti-file-spreadsheet"></i> Upload Excel <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleExcelUpload(event)"></label>
       <button class="btn btn-success" onclick="submitBatchStockIn()" id="batch-submit-btn" disabled><i class="ti ti-check"></i> Submit All Stock In (<span id="batch-count">0</span>)</button>
     </div>
@@ -710,7 +711,8 @@ function printMyRequests(){
       </table>
     </div>
     <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">
-      <button class="btn btn-sm" onclick="batchItems=[];renderBatch()" style="color:var(--red)"><i class="ti ti-trash"></i> Clear All</button>
+      <button class="btn btn-sm" onclick="batchItems=[];_lastSI={lot:'',exp:''};renderBatch()" style="color:var(--red)"><i class="ti ti-trash"></i> Clear All</button>
+      <button class="btn btn-sm" onclick="openBatchLabelModal()" style="background:#7c3aed;color:#fff;border-color:#7c3aed"><i class="ti ti-barcode"></i> Print Label</button>
       <button class="btn btn-sm btn-success" onclick="submitBatchStockIn()"><i class="ti ti-check"></i> Submit All</button>
     </div>
   </div>
@@ -1725,6 +1727,11 @@ let CU=null; // current user
 let batchItems=[]; // stock in batch
 let visData={}; // visibility checkboxes {itemCode: {ward:true,...}}
 let allItems=[],allUsers=[],allWards=[];
+// The full, unfiltered item master list — kept separate from Master Inventory's
+// page-local filtered view (allItems used to double as both, so searching/filtering
+// on the Master Inventory page would silently narrow what Stock In, Stock Out, and
+// every other page's item lookup could find, until the filter was manually cleared).
+let allItemsMaster=[];
 
 function refreshDynLists(){
   // Build supplier list from existing items
@@ -1976,7 +1983,7 @@ function prefillRememberedUser(){
 }
 prefillRememberedUser();
 function showLoginErr(msg){let e=document.getElementById('login-err');e.textContent=msg;e.style.display='block';setTimeout(()=>e.style.display='none',3000)}
-function doLogout(){CU=null;batchItems=[];document.getElementById('main-app').style.display='none';document.getElementById('login-page').style.display='flex';document.getElementById('inp-user').value='';document.getElementById('inp-pass').value='';prefillRememberedUser()}
+function doLogout(){CU=null;batchItems=[];_lastSI={lot:'',exp:''};document.getElementById('main-app').style.display='none';document.getElementById('login-page').style.display='flex';document.getElementById('inp-user').value='';document.getElementById('inp-pass').value='';prefillRememberedUser()}
 
 // ===== USER PROFILE (avatar + bio) =====
 function renderUserAvatar(){
@@ -2148,6 +2155,7 @@ async function saveProfile(){
 async function loadMeta(){
   let {data:items}=await db.from('items').select('code,name,category,ref,lot,expiry,unit,size,balance,min_stock,storage_condition,storage_area,unit_price,supplier,source,brand,units_per_pack,pcs_unit_label').order('code');
   allItems=items||[];
+  allItemsMaster=items||[];
   refreshDynLists();
   let {data:users}=await db.from('app_users').select('*').order('full_name');
   allUsers=users||[];
@@ -2842,6 +2850,7 @@ function renderInvHeader(){
 }
 
 let _invFullCache=null;
+let _invFilteredCache=[]; // Master Inventory's currently-filtered view — used by showAllItems()/export, kept separate from allItems (the true master list) so filtering here never affects item lookup elsewhere
 async function loadInventory(forceRefresh){
   renderInvHeader();
   let search=document.getElementById('inv-search').value.trim();
@@ -2856,13 +2865,25 @@ async function loadInventory(forceRefresh){
     let {data}=await db.from('items').select('*').order('code');
     if(!data){document.getElementById('inv-body').innerHTML='<tr><td colspan="33"><div class="empty">Error</div></td></tr>';return}
     _invFullCache=data;
+    // Keep BOTH the full-list references in sync with the freshest fetch (this
+    // select('*') has more fields than loadMeta's, so prefer it once available).
+    // allItems must stay the true master list here — newly-created items (via
+    // "Create Item" → loadInventory(true)) need to show up immediately in Stock
+    // In / Stock Out search without requiring a re-login.
+    allItemsMaster=data;
+    allItems=data;
   }
   let items=_invFullCache.slice();
   if(cat)items=items.filter(i=>i.category===cat);
   if(src)items=items.filter(i=>i.source===src);
   if(search)items=items.filter(i=>`${i.code}${i.name}${i.category}${i.ref||''}`.toLowerCase().includes(search.toLowerCase()));
   if(status)items=items.filter(i=>(i.balance<=i.min_stock?'REORDER':'OK')===status);
-  allItems=items;
+  // NOTE: allItems is intentionally NOT reassigned here anymore. It used to be set to
+  // this page's filtered subset, which silently broke item lookup (search/scan/find)
+  // on every other page — Stock In, Stock Out, Requests, Reports — until the admin
+  // remembered to clear the Master Inventory filter. Master Inventory's own render/export
+  // below uses `items`/`_invFilteredCache` directly instead.
+  _invFilteredCache=items;
   refreshDynLists();
   // Update counter
   let _src=document.getElementById('inv-src').value;
@@ -2953,16 +2974,10 @@ async function loadInventory(forceRefresh){
 }
 
 function showAllItems(){
-  // Re-render without 50 limit
-  let search=document.getElementById('inv-search').value.trim();
-  let cat=document.getElementById('inv-cat').value;
-  let src=document.getElementById('inv-src').value;
-  let status=document.getElementById('inv-status').value;
-  let items=allItems.filter(i=>{
-    if(search&&!`${i.code}${i.name}${i.category}${i.ref||''}`.toLowerCase().includes(search.toLowerCase()))return false;
-    if(status&&(i.balance<=i.min_stock?'REORDER':'OK')!==status)return false;
-    return true;
-  });
+  // Re-render without 50 limit — reuse the already-filtered set from the last
+  // loadInventory() call (has cat/src/search/status all applied) instead of
+  // re-deriving from allItems, which no longer holds a filtered subset.
+  let items=_invFilteredCache;
   let counterEl=document.getElementById('inv-counter');
   if(counterEl)counterEl.innerHTML=`📦 <strong style="color:var(--blue);font-size:15px">${items.length}</strong> <span style="font-size:12px;color:var(--muted)">items [ទាំងអស់]</span>`;
   document.getElementById('inv-body').innerHTML=items.map(i=>{
@@ -3336,6 +3351,8 @@ async function openEditItem(code){
     <div class="form-group"><label>Lot No</label><input id="ei-lot" value="${i.lot||''}"></div>
     <div class="form-group"><label>Date Incoming</label><input id="ei-datein" type="date" value="${i.date_in||''}"></div>
     <div class="form-group"><label>Expiry Date</label><input id="ei-exp" type="date" value="${i.expiry||''}"></div>
+    <div class="form-group"><label>Unit</label><input id="ei-unit" value="${i.unit||''}" placeholder="Kit, Box..."></div>
+    <div class="form-group"><label>Size</label><input id="ei-size" value="${i.size||''}" placeholder="100T, 20L..."></div>
     <div class="form-group"><label>Brand / Instrument</label>${comboField('ei-brand',i.brand||'',[...DYN_BRANDS],'Brand...')}</div>
     <div class="form-group"><label>Supplier</label>${comboField('ei-sup',i.supplier||'',[...DYN_SUPPLIERS],'Supplier...')}</div>
     <div class="form-group"><label>Source</label>${comboField('ei-src',i.source||'',[...SOURCES],'Source...')}</div>
@@ -3442,7 +3459,7 @@ async function saveEdit(code,oldBal){
   let newVals={
     name:document.getElementById('ei-name').value,ref:document.getElementById('ei-ref').value,
     lot:document.getElementById('ei-lot').value,date_in:document.getElementById('ei-datein').value||null,
-    expiry:document.getElementById('ei-exp').value||null,brand:comboVal('ei-brand'),supplier:comboVal('ei-sup'),source:comboVal('ei-src'),
+    expiry:document.getElementById('ei-exp').value||null,unit:document.getElementById('ei-unit')?.value||'',size:document.getElementById('ei-size')?.value||'',brand:comboVal('ei-brand'),supplier:comboVal('ei-sup'),source:comboVal('ei-src'),
     unit_price:parseFloat(document.getElementById('ei-price').value)||0,
     min_stock:parseInt(document.getElementById('ei-min').value)||0,
     opening_stock:useOpen?openStock:undefined,
@@ -3471,7 +3488,7 @@ async function saveEdit(code,oldBal){
   // Log field-level changes for audit trail (silently skip if item_edit_log table isn't set up yet)
   if(before){
     try{
-      let tracked=['name','ref','lot','expiry','brand','supplier','source','unit_price','min_stock','storage_condition','storage_area','shelf','item_status','remarks'];
+      let tracked=['name','ref','lot','expiry','unit','size','brand','supplier','source','unit_price','min_stock','storage_condition','storage_area','shelf','item_status','remarks'];
       let changes=[];
       tracked.forEach(f=>{
         let ov=before[f]??'';let nv=newVals[f]??'';
@@ -3516,6 +3533,10 @@ var FIELD_LABELS_AUDIT={name:'Item Name',ref:'Ref.',lot:'Lot No',expiry:'Expiry'
 
 // ===== STOCK IN BATCH + SMART SCAN =====
 let _scanItem=null;
+// Remembers the last Lot No / Expiry Date typed or scanned during Stock In,
+// so the next item pre-fills with the same values instead of starting blank
+// (most deliveries share Lot/Expiry across several items). Cleared with the batch.
+let _lastSI={lot:'',exp:''};
 
 function parseGS1Barcode(raw){
   let result={code:null,lot:null,expiry:null,ref:null,gtin:null};
@@ -3653,10 +3674,10 @@ async function smartScan(){
 
   _scanItem=item;
   document.getElementById('si-preview-name').value=item.code+' — '+item.name;
-  document.getElementById('si-preview-lot').value=parsed.lot||'';
+  document.getElementById('si-preview-lot').value=parsed.lot||_lastSI.lot||'';
   document.getElementById('si-preview-ref').value=item.ref||'';
   document.getElementById('si-preview-datein').value=today().toISOString().split('T')[0];
-  document.getElementById('si-preview-exp').value=parsed.expiry||'';
+  document.getElementById('si-preview-exp').value=parsed.expiry||_lastSI.exp||'';
   document.getElementById('si-preview-unit').value=item.unit||'';
   document.getElementById('si-preview-size').value=item.size||'';
   // Rebuild supplier dropdown with current DYN_SUPPLIERS
@@ -3681,6 +3702,14 @@ async function smartScan(){
   if(document.getElementById('si-preview-obs'))document.getElementById('si-preview-obs').value='';
   document.getElementById('scan-preview').style.display='block';
   document.getElementById('bc-in').value='';
+
+  // Carry over the last-typed Lot/Expiry to the next scan (pre-filled, not
+  // locked) — most deliveries share the same Lot/Expiry across several items,
+  // so this avoids retyping them every single scan. Admin can still overwrite.
+  if(parsed.lot||parsed.expiry){
+    if(parsed.lot)_lastSI.lot=parsed.lot;
+    if(parsed.expiry)_lastSI.exp=parsed.expiry;
+  }
 
   // Show result toast
   if(parsed.lot&&parsed.expiry){
@@ -3721,6 +3750,9 @@ function confirmScanAdd(){
     batchItems.push({code:_scanItem.code,name:_scanItem.name,ref,lot,datein,exp,qty,unit,size,supplier:sup,source:src,ocode:'',conditionOk,lotVerified,temperature,observation});
     toast('បន្ថែម '+_scanItem.code+(lot?' Lot '+lot:'')+' ចូល Batch!','success');
   }
+  // Remember whatever Lot/Expiry was actually used (typed or scanned) for the next item
+  if(lot)_lastSI.lot=lot;
+  if(exp)_lastSI.exp=exp;
   _scanItem=null;
   document.getElementById('scan-preview').style.display='none';
   document.getElementById('bc-in').value='';
@@ -4040,6 +4072,7 @@ async function loadSIHist(){
     <td style="font-size:12px;color:var(--muted);max-width:120px">${l.observation||'-'}</td>
     <td style="white-space:nowrap">
       <button class="btn btn-sm" onclick="openEditStockInLog('${l.id}')" title="Edit"><i class="ti ti-edit" style="color:#185fa5"></i></button>
+      <button class="btn btn-sm" onclick="printSingleHistLabel('${l.id}')" title="Print Label" style="color:#7c3aed"><i class="ti ti-barcode"></i></button>
       <button class="btn btn-sm" onclick="deleteStockInLog('${l.id}','${l.item_code}',${l.qty},'${(l.lot||'').replace(/'/g,"\\'")}','${l.date||''}')" title="Delete"><i class="ti ti-trash" style="color:#a32d2d"></i></button>
     </td>
   </tr>`;
@@ -4049,6 +4082,35 @@ async function loadSIHist(){
 // Excel/CSV upload — uses the XLSX library so real .xlsx/.xls binary files parse
 // correctly (the old version only worked for .csv; feeding it a real .xlsx file
 // silently produced garbage since it was read as plain text)
+function downloadStockInTemplate(){
+  let headers=['Item Code','Name','Ref','Lot','Date In','Expiry','Qty','Unit','Size','Supplier','Source','Order Code'];
+  let example=[
+    ['BA1-1005','ALANINE AMINOTRANSFERASE (ALT/GPT)','REF-1005','L2026-001','2026-08-26','2027-06-30',10,'Kit','100T','Alinity','TSNH','PO-7883868'],
+    ['','','','','','','','','','','','']
+  ];
+  let ws=XLSX.utils.aoa_to_sheet([headers,...example]);
+  ws['!cols']=[{wch:14},{wch:28},{wch:12},{wch:14},{wch:12},{wch:12},{wch:8},{wch:10},{wch:10},{wch:16},{wch:10},{wch:14}];
+  let wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Stock In Template');
+  let notes=[
+    ['របៀបប្រើ Template នេះ (How to use):'],
+    [''],
+    ['1) Item Code — ចាំបាច់ (required), ត្រូវផ្គូផ្គងជាមួយ Master Inventory ត្រឹមត្រូវ'],
+    ['2) Qty — ចាំបាច់ (required), ចំនួនទទួល ≥ 1'],
+    ['3) Name, Ref, Lot, Date In, Expiry, Unit, Size, Supplier, Source, Order Code — ស្រេចចិត្ត (optional)'],
+    ['   → បើទទេ app នឹងទាញយកតម្លៃពី Master Inventory ដោយស្វ័យប្រវត្តិ (Name/Ref/Unit/Size)'],
+    ['   → Date In បើទទេ នឹងប្រើថ្ងៃបច្ចុប្បន្នដោយស្វ័យប្រវត្តិ'],
+    ['4) Date In & Expiry format: YYYY-MM-DD (ឧ. 2027-06-30)'],
+    ['5) Source ត្រូវជាមួយក្នុងចំណោម: TSNH, CMS, លទ្ធកម្ម, Free'],
+    ['6) លុប example row ចេញ មុននឹង upload ទិន្នន័យពិត'],
+    ['7) ចុច Upload Excel ក្នុង Stock In page → ជ្រើសរើស file នេះ → items បញ្ចូលទៅ Batch ស្វ័យប្រវត្តិ'],
+    ['8) ពិនិត្យ Batch list រួច ចុច "Submit All Stock In" ដើម្បីបញ្ចប់']
+  ];
+  let ws2=XLSX.utils.aoa_to_sheet(notes);
+  ws2['!cols']=[{wch:100}];
+  XLSX.utils.book_append_sheet(wb,ws2,'Instructions');
+  XLSX.writeFile(wb,'StockIn_Upload_Template.xlsx');
+}
 function handleExcelUpload(e){
   let file=e.target.files[0];if(!file)return;
   let reader=new FileReader();
@@ -4064,7 +4126,32 @@ function handleExcelUpload(e){
       return;
     }
     if(!rows.length){toast('File ទទេ ឬ format មិនត្រឹមត្រូវ!','error');return}
-    let added=0,skipped=[];
+    // Catch a mismatched/old file early with a clear message, instead of letting
+    // every row silently skip one-by-one with no obvious explanation why.
+    let firstRowKeys=Object.keys(rows[0]).map(k=>String(k).toLowerCase().trim());
+    let hasCode=firstRowKeys.some(k=>['item code','code','itemcode'].includes(k));
+    let hasQty=firstRowKeys.some(k=>['qty','quantity'].includes(k));
+    if(!hasCode||!hasQty){
+      toast('❌ Header របស់ file នេះមិនត្រូវនឹង Template ទេ! ត្រូវការយ៉ាងហោចណាស់ column "Item Code" និង "Qty" — សូម Download Template ថ្មី ហើយប្រើ header ដដែល','error');
+      return;
+    }
+    // Normalize a date cell to YYYY-MM-DD. Excel dates parsed via cellDates+dateNF
+    // already come out as clean ISO strings, but a cell typed as plain text (e.g.
+    // "26/8/2027" or "Aug 26 2027") passes through as-is — inserting that directly
+    // into a Postgres date column risks silent day/month corruption (26/8 could be
+    // misread as month 26) which is exactly the kind of error that matters for a
+    // lab Expiry Date. Anything not unambiguously ISO gets left blank + flagged
+    // instead of guessed, so the admin fills it in manually rather than trusting a
+    // wrong date.
+    function normalizeDateCell(v){
+      if(!v)return '';
+      let s=String(v).trim();
+      if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s; // already ISO
+      let m=s.match(/^(\d{4})[\/\.](\d{1,2})[\/\.](\d{1,2})$/); // YYYY/MM/DD or YYYY.MM.DD
+      if(m)return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+      return null; // ambiguous (e.g. DD/MM/YYYY vs MM/DD/YYYY) — don't guess
+    }
+    let added=0,skipped=[],dateWarnings=[];
     rows.forEach(rawRow=>{
       let row={};
       Object.keys(rawRow).forEach(k=>row[String(k).toLowerCase().trim()]=rawRow[k]);
@@ -4072,16 +4159,38 @@ function handleExcelUpload(e){
       if(!code)return;
       let item=allItems.find(it=>it.code.toLowerCase()===code.toLowerCase());
       if(!item){skipped.push(code);return}
-      if(batchItems.find(b=>b.code===item.code))return;
       let qty=parseInt(row['qty']||row['quantity']);
       if(!qty||qty<1){skipped.push(code+' (qty មិនត្រឹមត្រូវ)');return}
-      batchItems.push({code:item.code,name:item.name,lot:row['lot no']||row['lot']||item.lot||'',
-        exp:row['expiry date']||row['expiry']||item.expiry||'',qty,
-        supplier:row['supplier']||item.supplier||'',source:row['source']||item.source||'TSNH',ocode:row['order code']||''});
+      let rawDatein=row['date in']||row['datein']||'';
+      let rawExp=row['expiry']||row['expiry date']||'';
+      // Date In has no editable column in the Batch table below, so an ambiguous
+      // value falls back safely to today (same as the no-value case) rather than
+      // being left blank with no way to fix it in the UI. Expiry Date DOES have an
+      // editable column there, so that one is safe to leave blank + flag for review.
+      let normDatein=rawDatein?normalizeDateCell(rawDatein):null;
+      let datein=normDatein||today().toISOString().split('T')[0];
+      let exp=rawExp?normalizeDateCell(rawExp):(item.expiry||'');
+      if(rawDatein&&normDatein===null)dateWarnings.push(code+' (Date In: "'+rawDatein+'" មិនច្បាស់ — ប្រើថ្ងៃនេះជំនួស)');
+      if(rawExp&&exp===null){dateWarnings.push(code+' (Expiry: "'+rawExp+'" មិនច្បាស់ — សូមកែក្នុង Batch table)');exp='';}
+      let lot=row['lot']||row['lot no']||item.lot||'';
+      let existing=batchItems.find(b=>b.code===item.code&&b.lot===lot);
+      if(existing){
+        existing.qty+=qty;
+      } else {
+        batchItems.push({code:item.code,name:row['name']||item.name,ref:row['ref']||item.ref||'',
+          lot,
+          datein,exp,qty,
+          unit:row['unit']||item.unit||'',size:row['size']||item.size||'',
+          supplier:row['supplier']||item.supplier||'',source:row['source']||item.source||'TSNH',
+          ocode:row['order code']||'',conditionOk:true,lotVerified:false,temperature:'',observation:''});
+      }
       added++;
     });
     renderBatch();
-    toast('✅ បានបញ្ចូល '+added+' items ពី Excel!'+(skipped.length?' ⚠️ '+skipped.length+' skip ('+skipped.slice(0,3).join(', ')+(skipped.length>3?'...':'')+')':''),added?'success':'error');
+    let msg='✅ បានបញ្ចូល '+added+' items ពី Excel!';
+    if(skipped.length)msg+=' ⚠️ '+skipped.length+' skip ('+skipped.slice(0,3).join(', ')+(skipped.length>3?'...':'')+')';
+    if(dateWarnings.length)msg+=' 📅 '+dateWarnings.length+' date មិនច្បាស់ ('+dateWarnings.slice(0,2).join('; ')+(dateWarnings.length>2?'...':'')+') — សូមពិនិត្យក្នុង Batch table';
+    toast(msg,added?(dateWarnings.length?'info':'success'):'error');
   };
   reader.readAsArrayBuffer(file);
   e.target.value='';
@@ -8591,6 +8700,296 @@ function syncLabelQty(idx){
   let qtyEl=document.getElementById('si-po-qty-'+idx);
   let labelEl=document.getElementById('si-po-labelqty-'+idx);
   if(qtyEl&&labelEl)labelEl.value=qtyEl.value;
+}
+
+function openBatchLabelModal(){
+  if(!batchItems.length){toast('គ្មាន item ក្នុង Batch ទេ!','error');return}
+  let rows=batchItems.map((b,idx)=>`
+    <tr>
+      <td style="padding:6px 8px">${idx+1}</td>
+      <td style="padding:6px 8px"><code>${b.code}</code></td>
+      <td style="padding:6px 8px">${b.name}</td>
+      <td style="padding:6px 8px">${b.lot||'-'}</td>
+      <td style="padding:6px 8px;text-align:right">${b.qty}</td>
+      <td style="padding:6px 8px;text-align:center">
+        <input type="number" id="bl-labelqty-${idx}" value="${b.qty}" min="0" style="width:60px;padding:4px 6px;text-align:center">
+      </td>
+    </tr>`).join('');
+  openModal(`
+    <h3><i class="ti ti-barcode" style="color:#7c3aed"></i> Print Label — Batch Items</h3>
+    <div style="background:#f4f0fb;border-radius:8px;padding:8px 12px;font-size:12px;color:#5b21b6;margin-bottom:12px">
+      <i class="ti ti-info-circle"></i> Label Qty default = Qty ។ អាចកែបានតាមត្រូវការ (0 = មិន print item នេះ)
+    </div>
+    <div style="max-height:400px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="position:sticky;top:0;background:#f8f9fa"><tr>
+          <th style="padding:6px 8px;text-align:left">#</th>
+          <th style="padding:6px 8px;text-align:left">Code</th>
+          <th style="padding:6px 8px;text-align:left">Item Name</th>
+          <th style="padding:6px 8px;text-align:left">Lot</th>
+          <th style="padding:6px 8px;text-align:right">Qty</th>
+          <th style="padding:6px 8px;text-align:center">Label Qty</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <div style="display:inline-flex;align-items:center;gap:4px;margin:0 4px;font-size:12px;color:var(--muted)">
+        <label style="white-space:nowrap">ទំហំ Label:</label>
+        <input type="number" id="label-w-mm" value="${localStorage.getItem('label_w_mm')||'50.8'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Width (mm)">
+        <span>×</span>
+        <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
+        <span>mm</span>
+      </div>
+      <button class="btn" onclick="printBatchLabels()" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
+        <i class="ti ti-barcode"></i> Print Barcodes
+      </button>
+    </div>`);
+}
+
+function printBatchLabels(){
+  let labelW=parseFloat(document.getElementById('label-w-mm')?.value)||50;
+  let labelH=parseFloat(document.getElementById('label-h-mm')?.value)||25;
+  try{localStorage.setItem('label_w_mm',labelW);localStorage.setItem('label_h_mm',labelH);}catch(e){}
+  let scale=Math.min(labelW,labelH)/25;
+  let codeSize=(7*scale).toFixed(1);
+  let nameSize=(5*scale).toFixed(1);
+  let infoSize=(4.5*scale).toFixed(1);
+  let usedSize=(4*scale).toFixed(1);
+  let barcodeW=Math.max(labelW-4,10).toFixed(1);
+  let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
+  let nameMaxH=(labelH*0.32).toFixed(1);
+
+  // window.open() synchronously to avoid popup blockers (same fix as printPOBarcodes)
+  let win=window.open('','_blank','width=800,height=600');
+  if(!win){
+    toast('❌ Browser បានទប់ស្កាត់ Popup! សូម Allow Popups សម្រាប់ site នេះ ហើយសាកល្បងម្តងទៀត','error');
+    return;
+  }
+  win.document.write('<!DOCTYPE html><html><head><title>Loading...</title></head><body style="font-family:Arial;padding:40px;text-align:center;color:#888">Preparing barcodes...</body></html>');
+
+  let barcodeItems=[];
+  batchItems.forEach((b,idx)=>{
+    let labelQty=parseInt(document.getElementById('bl-labelqty-'+idx)?.value)||0;
+    for(let n=0;n<labelQty;n++){
+      barcodeItems.push({code:b.code,name:b.name,lot:b.lot,datein:b.datein,exp:b.exp,qty:b.qty,supplier:b.supplier,source:b.source});
+    }
+  });
+  if(!barcodeItems.length){
+    win.close();
+    toast('គ្មាន Label Qty ដែលធំជាង 0!','error');
+    return;
+  }
+  closeModal();
+
+  let labels=barcodeItems.map(b=>`
+    <div class="label">
+      ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
+      ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
+      <div class="label-inner" style="margin-left:${b.supplier?'3mm':'0'};margin-right:${b.source?'3mm':'0'}">
+        <div class="label-code">${b.code}</div>
+        <div class="label-name">${b.name}</div>
+        <svg class="barcode" data-code="${b.code}"></svg>
+        <div class="label-info">
+          <div><b>Date Receive:</b> ${fd(b.datein)}</div>
+          <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
+        </div>
+      </div>
+    </div>`).join('');
+
+  win.document.open();
+  win.document.write(`<!DOCTYPE html><html><head><title>Barcodes — Stock In Batch</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#fff;margin:10px}
+    .labels{display:flex;flex-wrap:wrap;gap:3mm}
+    .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
+    .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
+    .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
+    .barcode{width:${barcodeW}mm;height:${barcodeH}mm}
+    .label-info{font-size:${infoSize}pt;color:#444;text-align:left;line-height:1.5}
+    .label-used{border-top:0.5px dashed #bbb;padding-top:0.5mm;font-size:${usedSize}pt;color:#555}
+    .barcode-error{font-size:${codeSize}pt;font-weight:700;letter-spacing:2px;padding:2mm 0;color:#222;font-family:monospace}
+    @media print{
+      @page{size:${labelW}mm ${labelH}mm;margin:0}
+      body{margin:0}
+      .no-print{display:none}
+      .labels{display:block;gap:0}
+      .label{border:none;width:${labelW}mm;height:${labelH}mm;margin:0;page-break-after:always;page-break-inside:avoid}
+      .label:last-child{page-break-after:auto}
+    }
+  </style></head><body>
+  <div class="no-print" style="margin-bottom:10px">
+    <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
+    <span style="margin-left:10px;font-size:13px;color:#666">Stock In Batch — ${barcodeItems.length} labels — ${labelW}×${labelH}mm</span>
+    <span id="jsb-status" style="margin-left:10px;font-size:12px;color:#c0392b"></span>
+  </div>
+  <div class="labels">${labels}</div>
+  <script>
+    var jsbOk = (typeof JsBarcode !== 'undefined');
+    document.querySelectorAll('.barcode').forEach(function(el){
+      var code = el.getAttribute('data-code');
+      if(jsbOk){
+        try{
+          JsBarcode(el, code, {format:'CODE128', width:1.5, height:40, displayValue:false, margin:2});
+        }catch(e){
+          jsbOk = false;
+        }
+      }
+      if(!jsbOk){
+        var fallback = document.createElement('div');
+        fallback.className = 'barcode-error';
+        fallback.textContent = code;
+        el.replaceWith(fallback);
+      }
+    });
+    if(!jsbOk){
+      var s = document.getElementById('jsb-status');
+      if(s) s.textContent = '⚠️ Barcode library មិនអាច load បាន (network) — បង្ហាញជា text ជំនួស';
+    }
+  <\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+function printSingleHistLabel(id){
+  let l=window._siHistLogs?.[id];
+  if(!l){toast('រកមិនឃើញទិន្នន័យ Stock In នេះ!','error');return}
+  openModal(`
+    <h3><i class="ti ti-barcode" style="color:#7c3aed"></i> Print Label — ${l.item_code}</h3>
+    <div style="background:#f4f0fb;border-radius:8px;padding:10px 12px;font-size:13px;color:#333;margin-bottom:14px">
+      <div><b>${l.item_code}</b> — ${l.item_name}</div>
+      <div style="color:var(--muted);margin-top:2px">Lot: ${l.lot||'-'} • Date In: ${fd(l.date)} • Expiry: ${fd(l.expiry)}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <label style="white-space:nowrap;font-size:13px">Label Qty:</label>
+      <input type="number" id="hl-labelqty" value="${l.qty}" min="1" style="width:80px;padding:6px 8px;text-align:center">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <div style="display:inline-flex;align-items:center;gap:4px;margin:0 4px;font-size:12px;color:var(--muted)">
+        <label style="white-space:nowrap">ទំហំ Label:</label>
+        <input type="number" id="label-w-mm" value="${localStorage.getItem('label_w_mm')||'50.8'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Width (mm)">
+        <span>×</span>
+        <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
+        <span>mm</span>
+      </div>
+      <button class="btn" onclick="printHistLabelConfirm('${id}')" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
+        <i class="ti ti-barcode"></i> Print Barcodes
+      </button>
+    </div>`);
+}
+
+function printHistLabelConfirm(id){
+  let l=window._siHistLogs?.[id];
+  if(!l){toast('រកមិនឃើញទិន្នន័យ Stock In នេះ!','error');return}
+  let labelQty=parseInt(document.getElementById('hl-labelqty')?.value)||0;
+  if(labelQty<1){toast('Label Qty ត្រូវធំជាង 0!','error');return}
+  let labelW=parseFloat(document.getElementById('label-w-mm')?.value)||50;
+  let labelH=parseFloat(document.getElementById('label-h-mm')?.value)||25;
+  try{localStorage.setItem('label_w_mm',labelW);localStorage.setItem('label_h_mm',labelH);}catch(e){}
+  let scale=Math.min(labelW,labelH)/25;
+  let codeSize=(7*scale).toFixed(1);
+  let nameSize=(5*scale).toFixed(1);
+  let infoSize=(4.5*scale).toFixed(1);
+  let usedSize=(4*scale).toFixed(1);
+  let barcodeW=Math.max(labelW-4,10).toFixed(1);
+  let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
+  let nameMaxH=(labelH*0.32).toFixed(1);
+
+  let win=window.open('','_blank','width=800,height=600');
+  if(!win){
+    toast('❌ Browser បានទប់ស្កាត់ Popup! សូម Allow Popups សម្រាប់ site នេះ ហើយសាកល្បងម្តងទៀត','error');
+    return;
+  }
+  win.document.write('<!DOCTYPE html><html><head><title>Loading...</title></head><body style="font-family:Arial;padding:40px;text-align:center;color:#888">Preparing barcodes...</body></html>');
+  closeModal();
+
+  let b={code:l.item_code,name:l.item_name,lot:l.lot,datein:l.date,exp:l.expiry,qty:l.qty,supplier:l.supplier,source:l.source};
+  let labelHtml='';
+  for(let n=0;n<labelQty;n++){
+    labelHtml+=`
+    <div class="label">
+      ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
+      ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
+      <div class="label-inner" style="margin-left:${b.supplier?'3mm':'0'};margin-right:${b.source?'3mm':'0'}">
+        <div class="label-code">${b.code}</div>
+        <div class="label-name">${b.name}</div>
+        <svg class="barcode" data-code="${b.code}"></svg>
+        <div class="label-info">
+          <div><b>Date Receive:</b> ${fd(b.datein)}</div>
+          <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  win.document.open();
+  win.document.write(`<!DOCTYPE html><html><head><title>Barcodes — ${b.code}</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#fff;margin:10px}
+    .labels{display:flex;flex-wrap:wrap;gap:3mm}
+    .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:3mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(4*scale).toFixed(1)}pt;color:#666;letter-spacing:.02em}
+    .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
+    .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
+    .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
+    .barcode{width:${barcodeW}mm;height:${barcodeH}mm}
+    .label-info{font-size:${infoSize}pt;color:#444;text-align:left;line-height:1.5}
+    .label-used{border-top:0.5px dashed #bbb;padding-top:0.5mm;font-size:${usedSize}pt;color:#555}
+    .barcode-error{font-size:${codeSize}pt;font-weight:700;letter-spacing:2px;padding:2mm 0;color:#222;font-family:monospace}
+    @media print{
+      @page{size:${labelW}mm ${labelH}mm;margin:0}
+      body{margin:0}
+      .no-print{display:none}
+      .labels{display:block;gap:0}
+      .label{border:none;width:${labelW}mm;height:${labelH}mm;margin:0;page-break-after:always;page-break-inside:avoid}
+      .label:last-child{page-break-after:auto}
+    }
+  </style></head><body>
+  <div class="no-print" style="margin-bottom:10px">
+    <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
+    <span style="margin-left:10px;font-size:13px;color:#666">${b.code} — ${labelQty} labels — ${labelW}×${labelH}mm</span>
+    <span id="jsb-status" style="margin-left:10px;font-size:12px;color:#c0392b"></span>
+  </div>
+  <div class="labels">${labelHtml}</div>
+  <script>
+    var jsbOk = (typeof JsBarcode !== 'undefined');
+    document.querySelectorAll('.barcode').forEach(function(el){
+      var code = el.getAttribute('data-code');
+      if(jsbOk){
+        try{
+          JsBarcode(el, code, {format:'CODE128', width:1.5, height:40, displayValue:false, margin:2});
+        }catch(e){
+          jsbOk = false;
+        }
+      }
+      if(!jsbOk){
+        var fallback = document.createElement('div');
+        fallback.className = 'barcode-error';
+        fallback.textContent = code;
+        el.replaceWith(fallback);
+      }
+    });
+    if(!jsbOk){
+      var s = document.getElementById('jsb-status');
+      if(s) s.textContent = '⚠️ Barcode library មិនអាច load បាន (network) — បង្ហាញជា text ជំនួស';
+    }
+  <\/script>
+  </body></html>`);
+  win.document.close();
 }
 
 async function printPOBarcodes(poId, poNo, count){
