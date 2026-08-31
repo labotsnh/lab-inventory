@@ -720,19 +720,24 @@ function printMyRequests(){
   <!-- Stock In History -->
   <div class="card">
     <h3><i class="ti ti-history" style="color:var(--blue)"></i> Stock In History</h3>
-    <div style="display:flex;gap:8px;margin-bottom:10px">
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
       <input type="date" id="si-filter-date" onchange="loadSIHist()" style="width:150px;padding:6px 10px;font-size:12px">
       <select id="si-filter-src" onchange="loadSIHist()" style="width:130px;padding:6px 10px;font-size:12px">
         <option value="">ទាំងអស់ Source</option>
         <option>TSNH</option><option>CMS</option><option>លទ្ធកម្ម</option><option>Free</option>
       </select>
+      <button class="btn btn-sm" onclick="printStockIn()" title="បើក Print Dialog — ជ្រើសរើស 'Save as PDF' ដើម្បីរក្សាទុកជា PDF"><i class="ti ti-file-type-pdf"></i> Print PDF</button>
+      <button class="btn btn-sm" onclick="exportStockInHistoryWord()"><i class="ti ti-file-type-doc"></i> Print Word</button>
       <button class="btn btn-sm" onclick="document.getElementById('si-filter-date').value='';document.getElementById('si-filter-src').value='';loadSIHist()">Clear</button>
+      <button class="btn btn-sm" onclick="openHistLabelModal()" style="background:#7c3aed;color:#fff;border-color:#7c3aed;margin-left:auto"><i class="ti ti-barcode"></i> Print Label (Selected)</button>
     </div>
     <div style="overflow:auto;max-height:420px">
       <table><thead><tr>
         <th>Code</th><th>Item Name</th><th>Unit</th><th>Size</th><th>Order Qty</th>
         <th>Ref.</th><th>Lot No</th><th>Date In</th><th>Supplier</th><th>Source</th>
-        <th>Expiry Date</th><th>Qty Received</th><th>Acceptance<br>Check</th><th>Cold Chain<br>Check</th><th>Remarks</th><th>Actions</th>
+        <th>Expiry Date</th><th>Qty Received</th><th>Acceptance<br>Check</th><th>Cold Chain<br>Check</th><th>Remarks</th><th>Received By</th>
+        <th style="width:30px"><input type="checkbox" id="si-hist-check-all" onclick="toggleAllSIHist(this)" title="ជ្រើសរើសទាំងអស់"></th>
+        <th>Actions</th>
       </tr></thead>
       <tbody id="si-hist"></tbody></table>
     </div>
@@ -792,7 +797,7 @@ function printMyRequests(){
       <div style="overflow:auto;max-height:420px">
         <table><thead><tr>
           <th>Date</th><th>Code</th><th>Name</th><th>Ref.</th><th>Lot</th><th>Expiry</th><th>Unit</th><th>Size</th>
-          <th style="text-align:right">Qty</th><th>Department</th><th>Ward</th><th>Source</th>
+          <th style="text-align:right">Qty</th><th>Department</th><th>Ward</th><th>Source</th><th>Issued By</th>
         </tr></thead>
         <tbody id="so-hist"></tbody></table>
       </div>
@@ -1769,6 +1774,16 @@ function getUserInitials(){
 }
 function setUserInitials(v){
   try{localStorage.setItem('label_initials_'+(CU?.id||CU?.username||''),(v||'').toUpperCase());}catch(e){}
+}
+// Looks up a display name for a stored `created_by`/`approved_by` user id
+// against the already-loaded allUsers list. stock_in_log/stock_out_log only
+// store the id (their schema has no created_by_name column — a prior attempt
+// to insert one caused every row to silently fail to save), so the name for
+// "Received By"/"Issued By" columns is resolved here at render time instead.
+function userName(id){
+  if(!id)return '-';
+  let u=allUsers.find(u=>u.id===id);
+  return u?(u.full_name||u.username||'-'):'-';
 }
 function daysDiff(exp){if(!exp)return 9999;return Math.floor((new Date(exp)-today())/86400000)}
 function srcBadge(s){let m={TSNH:'tsnh',CMS:'cms',Free:'free'};let c=m[s]||(String(s).includes('លទ្ធ')?'ldth':'tsnh');return`<span class="badge badge-${c}">${s||''}</span>`}
@@ -4058,7 +4073,7 @@ async function loadSIHist(){
   let el=document.getElementById('si-hist');if(!el)return;
   if(siErr){
     console.error('[Stock In History] Supabase error:',siErr);
-    el.innerHTML='<tr><td colspan="16"><div class="empty" style="color:var(--red)">Error: '+(siErr.message||siErr.code)+' — សូម check RLS Policy លើ stock_in_log</div></td></tr>';
+    el.innerHTML='<tr><td colspan="18"><div class="empty" style="color:var(--red)">Error: '+(siErr.message||siErr.code)+' — សូម check RLS Policy លើ stock_in_log</div></td></tr>';
     return;
   }
   window._siHistLogs={};
@@ -4088,13 +4103,15 @@ async function loadSIHist(){
     <td style="text-align:center">${checkBadge(l.condition_ok)}</td>
     <td style="text-align:center">${checkBadge(l.cold_chain_ok)}</td>
     <td style="font-size:12px;color:var(--muted);max-width:120px">${l.observation||'-'}</td>
+    <td style="font-size:12px;color:var(--muted)">${userName(l.created_by)}</td>
+    <td style="text-align:center"><input type="checkbox" class="si-hist-check" value="${l.id}"></td>
     <td style="white-space:nowrap">
       <button class="btn btn-sm" onclick="openEditStockInLog('${l.id}')" title="Edit"><i class="ti ti-edit" style="color:#185fa5"></i></button>
       <button class="btn btn-sm" onclick="printSingleHistLabel('${l.id}')" title="Print Label" style="color:#7c3aed"><i class="ti ti-barcode"></i></button>
       <button class="btn btn-sm" onclick="deleteStockInLog('${l.id}','${l.item_code}',${l.qty},'${(l.lot||'').replace(/'/g,"\\'")}','${l.date||''}')" title="Delete"><i class="ti ti-trash" style="color:#a32d2d"></i></button>
     </td>
   </tr>`;
-  }).join(''):'<tr><td colspan="16"><div class="empty">គ្មានប្រវត្តិ</div></td></tr>';
+  }).join(''):'<tr><td colspan="18"><div class="empty">គ្មានប្រវត្តិ</div></td></tr>';
 }
 
 // Excel/CSV upload — uses the XLSX library so real .xlsx/.xls binary files parse
@@ -4169,16 +4186,37 @@ function handleExcelUpload(e){
       if(m)return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
       return null; // ambiguous (e.g. DD/MM/YYYY vs MM/DD/YYYY) — don't guess
     }
-    let added=0,skipped=[],dateWarnings=[];
+    let added=0,skipped=[],dateWarnings=[],nameMatched=[];
     rows.forEach(rawRow=>{
       let row={};
       Object.keys(rawRow).forEach(k=>row[String(k).toLowerCase().trim()]=rawRow[k]);
       let code=String(row['item code']||row['code']||row['itemcode']||'').trim();
-      if(!code)return;
-      let item=allItems.find(it=>it.code.toLowerCase()===code.toLowerCase());
-      if(!item){skipped.push(code);return}
+      let nameVal=String(row['name']||'').trim();
+      if(!code&&!nameVal)return; // fully blank row (e.g. leftover template row) — not worth flagging
+      let item=null;
+      if(code){
+        item=allItems.find(it=>it.code.toLowerCase()===code.toLowerCase());
+        if(!item){skipped.push(code+' (Item Code រកមិនឃើញក្នុង Master Inventory)');return}
+      } else {
+        // Item Code left blank but Name was filled in — fall back to matching by
+        // exact item name, since staff often know the product name but not its
+        // internal code. Only auto-match when exactly one item shares that name;
+        // an ambiguous match (0 or 2+) is not guessed, it's flagged for the admin
+        // to fix with the correct Item Code instead.
+        let nameMatches=allItems.filter(it=>(it.name||'').trim().toLowerCase()===nameVal.toLowerCase());
+        if(nameMatches.length===1){
+          item=nameMatches[0];
+          nameMatched.push(nameVal+' → '+item.code);
+        } else if(nameMatches.length>1){
+          skipped.push(nameVal+' (Item Code ទទេ, ឈ្មោះនេះដូចគ្នា '+nameMatches.length+' items — សូមបំពេញ Item Code ដោយផ្ទាល់)');
+          return;
+        } else {
+          skipped.push(nameVal+' (Item Code ទទេ, រកមិនឃើញឈ្មោះនេះក្នុង Master Inventory)');
+          return;
+        }
+      }
       let qty=parseInt(row['qty']||row['quantity']);
-      if(!qty||qty<1){skipped.push(code+' (qty មិនត្រឹមត្រូវ)');return}
+      if(!qty||qty<1){skipped.push(item.code+' (qty មិនត្រឹមត្រូវ)');return}
       let rawDatein=row['date in']||row['datein']||'';
       let rawExp=row['expiry']||row['expiry date']||'';
       // Date In has no editable column in the Batch table below, so an ambiguous
@@ -4188,8 +4226,8 @@ function handleExcelUpload(e){
       let normDatein=rawDatein?normalizeDateCell(rawDatein):null;
       let datein=normDatein||today().toISOString().split('T')[0];
       let exp=rawExp?normalizeDateCell(rawExp):(item.expiry||'');
-      if(rawDatein&&normDatein===null)dateWarnings.push(code+' (Date In: "'+rawDatein+'" មិនច្បាស់ — ប្រើថ្ងៃនេះជំនួស)');
-      if(rawExp&&exp===null){dateWarnings.push(code+' (Expiry: "'+rawExp+'" មិនច្បាស់ — សូមកែក្នុង Batch table)');exp='';}
+      if(rawDatein&&normDatein===null)dateWarnings.push(item.code+' (Date In: "'+rawDatein+'" មិនច្បាស់ — ប្រើថ្ងៃនេះជំនួស)');
+      if(rawExp&&exp===null){dateWarnings.push(item.code+' (Expiry: "'+rawExp+'" មិនច្បាស់ — សូមកែក្នុង Batch table)');exp='';}
       let lot=row['lot']||row['lot no']||item.lot||'';
       let existing=batchItems.find(b=>b.code===item.code&&b.lot===lot);
       if(existing){
@@ -4206,9 +4244,10 @@ function handleExcelUpload(e){
     });
     renderBatch();
     let msg='✅ បានបញ្ចូល '+added+' items ពី Excel!';
+    if(nameMatched.length)msg+=' 🔎 '+nameMatched.length+' ផ្គូផ្គងតាមឈ្មោះ ('+nameMatched.slice(0,2).join(', ')+(nameMatched.length>2?'...':'')+')';
     if(skipped.length)msg+=' ⚠️ '+skipped.length+' skip ('+skipped.slice(0,3).join(', ')+(skipped.length>3?'...':'')+')';
     if(dateWarnings.length)msg+=' 📅 '+dateWarnings.length+' date មិនច្បាស់ ('+dateWarnings.slice(0,2).join('; ')+(dateWarnings.length>2?'...':'')+') — សូមពិនិត្យក្នុង Batch table';
-    toast(msg,added?(dateWarnings.length?'info':'success'):'error');
+    toast(msg,added?((dateWarnings.length||nameMatched.length)?'info':'success'):'error');
   };
   reader.readAsArrayBuffer(file);
   e.target.value='';
@@ -4437,7 +4476,7 @@ async function loadSOHist(){
   if(soErr){
     console.error('[StockOut History] Supabase error:',soErr);
     let el2=document.getElementById('so-hist');
-    if(el2)el2.innerHTML='<tr><td colspan="12"><div class="empty" style="color:var(--red)">Error: '+( soErr.message||soErr.code)+' — សូម check RLS Policy លើ stock_out_log</div></td></tr>';
+    if(el2)el2.innerHTML='<tr><td colspan="13"><div class="empty" style="color:var(--red)">Error: '+( soErr.message||soErr.code)+' — សូម check RLS Policy លើ stock_out_log</div></td></tr>';
     return;
   }
   logs=logs||[];
@@ -4462,11 +4501,20 @@ async function loadSOHist(){
       <td style="font-size:12px">${l.department||'-'}</td>
       <td style="font-size:12px">${l.ward||'-'}</td>
       <td>${srcBadge(l.source)}</td>
+      <td style="font-size:12px;color:var(--muted)">${userName(l.created_by)}</td>
     </tr>`;
-  }).join(''):'<tr><td colspan="12"><div class="empty">គ្មានប្រវត្តិ</div></td></tr>';
+  }).join(''):'<tr><td colspan="13"><div class="empty">គ្មានប្រវត្តិ</div></td></tr>';
 }
 
 async function printStockIn(){
+  let html=await buildStockInHistoryReportHTML();
+  doPrint(html);
+}
+
+// Shared by "Print PDF" (printStockIn → doPrint → browser print dialog, user
+// picks Save as PDF) and "Print Word" (exportStockInHistoryWord → downloads a
+// .doc file) so both stay in sync with one source of truth for the report layout.
+async function buildStockInHistoryReportHTML(){
   let filterDate=document.getElementById('si-filter-date')?.value||'';
   let filterSrc=document.getElementById('si-filter-src')?.value||'';
   let q=db.from('stock_in_log').select('*').order('date',{ascending:false}).limit(500);
@@ -4522,7 +4570,7 @@ async function printStockIn(){
   </tr>`;
   }).join('');
 
-  doPrint(`
+  return `
     <div class="header">
       <h2>🏥 TSNHL Lab — Stock In Report</h2>
       <div class="sub">
@@ -4585,7 +4633,36 @@ async function printStockIn(){
           <td colspan="3" style="padding:6px 8px;border:1px solid #ddd;font-size:11px;color:#888">${logs.length} transactions</td>
         </tr>
       </tfoot>
-    </table>`);
+    </table>`;
+}
+
+// Downloads an HTML string as a .doc file that Microsoft Word can open directly
+// (Word recognizes HTML content saved with a .doc extension/MIME type — no
+// external library needed, keeping this in line with the app's fully
+// client-side/static hosting setup, same as how xlsx.js is used for Excel).
+function downloadHtmlAsWord(filename,bodyHtml){
+  let fullHtml=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+  <head><meta charset="utf-8"><title>${filename}</title>
+  <style>
+    body{font-family:Arial,sans-serif;font-size:11px;color:#1a1a18}
+    h2{font-size:15px;font-weight:700;color:#185fa5;margin-bottom:3px}
+    .sub{font-size:11px;color:#888;margin-bottom:10px}
+    .header{text-align:center;border-bottom:2px solid #185fa5;padding-bottom:8px;margin-bottom:12px}
+    table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px}
+  </style></head>
+  <body>${bodyHtml}</body></html>`;
+  let blob=new Blob(['\ufeff',fullHtml],{type:'application/msword'});
+  let url=URL.createObjectURL(blob);
+  let a=document.createElement('a');
+  a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function exportStockInHistoryWord(){
+  let html=await buildStockInHistoryReportHTML();
+  let dateStr=new Date().toISOString().split('T')[0];
+  downloadHtmlAsWord('StockIn_History_'+dateStr+'.doc',html);
 }
 
 async function exportStockInExcel(){
@@ -8853,6 +8930,180 @@ function printBatchLabels(){
   <div class="no-print" style="margin-bottom:10px">
     <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
     <span style="margin-left:10px;font-size:13px;color:#666">Stock In Batch — ${barcodeItems.length} labels — ${labelW}×${labelH}mm</span>
+    <span id="jsb-status" style="margin-left:10px;font-size:12px;color:#c0392b"></span>
+  </div>
+  <div class="labels">${labels}</div>
+  <script>
+    var jsbOk = (typeof JsBarcode !== 'undefined');
+    document.querySelectorAll('.barcode').forEach(function(el){
+      var code = el.getAttribute('data-code');
+      if(jsbOk){
+        try{
+          JsBarcode(el, code, {format:'CODE128', width:1.5, height:40, displayValue:false, margin:2});
+        }catch(e){
+          jsbOk = false;
+        }
+      }
+      if(!jsbOk){
+        var fallback = document.createElement('div');
+        fallback.className = 'barcode-error';
+        fallback.textContent = code;
+        el.replaceWith(fallback);
+      }
+    });
+    if(!jsbOk){
+      var s = document.getElementById('jsb-status');
+      if(s) s.textContent = '⚠️ Barcode library មិនអាច load បាន (network) — បង្ហាញជា text ជំនួស';
+    }
+  <\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+function toggleAllSIHist(chk){
+  document.querySelectorAll('.si-hist-check').forEach(c=>c.checked=chk.checked);
+}
+
+function openHistLabelModal(){
+  let ids=[...document.querySelectorAll('.si-hist-check:checked')].map(c=>c.value);
+  if(!ids.length){toast('សូមជ្រើសរើស Stock In History យ៉ាងហោចណាស់ 1 ជាមុនសិន (ធីក checkbox ខាងឆ្វេង)!','error');return}
+  let items=ids.map(id=>{
+    let l=window._siHistLogs?.[id];
+    if(!l)return null;
+    return {code:l.item_code,name:l.item_name,lot:l.lot,datein:l.date,exp:l.expiry,qty:l.qty,supplier:l.supplier,source:l.source};
+  }).filter(Boolean);
+  if(!items.length){toast('រកមិនឃើញទិន្នន័យសម្រាប់ record ដែលបានជ្រើសរើស!','error');return}
+  window._histLabelItems=items;
+  let rows=items.map((b,idx)=>`
+    <tr>
+      <td style="padding:6px 8px">${idx+1}</td>
+      <td style="padding:6px 8px"><code>${b.code}</code></td>
+      <td style="padding:6px 8px">${b.name}</td>
+      <td style="padding:6px 8px">${b.lot||'-'}</td>
+      <td style="padding:6px 8px;text-align:right">${b.qty}</td>
+      <td style="padding:6px 8px;text-align:center">
+        <input type="number" id="hbl-labelqty-${idx}" value="${b.qty}" min="0" style="width:60px;padding:4px 6px;text-align:center">
+      </td>
+    </tr>`).join('');
+  openModal(`
+    <h3><i class="ti ti-barcode" style="color:#7c3aed"></i> Print Label — ${items.length} Selected Records</h3>
+    <div style="background:#f4f0fb;border-radius:8px;padding:8px 12px;font-size:12px;color:#5b21b6;margin-bottom:12px">
+      <i class="ti ti-info-circle"></i> Label Qty default = Qty ។ អាចកែបានតាមត្រូវការ (0 = មិន print item នេះ)
+    </div>
+    <div style="max-height:400px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="position:sticky;top:0;background:#f8f9fa"><tr>
+          <th style="padding:6px 8px;text-align:left">#</th>
+          <th style="padding:6px 8px;text-align:left">Code</th>
+          <th style="padding:6px 8px;text-align:left">Item Name</th>
+          <th style="padding:6px 8px;text-align:left">Lot</th>
+          <th style="padding:6px 8px;text-align:right">Qty</th>
+          <th style="padding:6px 8px;text-align:center">Label Qty</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <div style="display:inline-flex;align-items:center;gap:4px;margin:0 4px;font-size:12px;color:var(--muted)">
+        <label style="white-space:nowrap">ទំហំ Label:</label>
+        <input type="number" id="label-w-mm" value="${localStorage.getItem('label_w_mm')||'50.8'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Width (mm)">
+        <span>×</span>
+        <input type="number" id="label-h-mm" value="${localStorage.getItem('label_h_mm')||'25.4'}" min="10" max="200" step="0.1" style="width:52px;padding:5px 6px;font-size:12px" title="Height (mm)">
+        <span>mm</span>
+        <label style="white-space:nowrap;margin-left:6px">Receive by:</label>
+        <input type="text" id="label-initials" value="${getUserInitials()}" maxlength="6" style="width:52px;padding:5px 6px;font-size:12px;text-transform:uppercase" title="អក្សរកាត់ (Initials) បង្ហាញលើ Label">
+      </div>
+      <button class="btn" onclick="printHistBatchLabels()" style="background:#7c3aed;color:#fff;border-color:#7c3aed">
+        <i class="ti ti-barcode"></i> Print Barcodes
+      </button>
+    </div>`);
+}
+
+function printHistBatchLabels(){
+  let items=window._histLabelItems||[];
+  if(!items.length){toast('គ្មានទិន្នន័យ!','error');return}
+  let labelW=parseFloat(document.getElementById('label-w-mm')?.value)||50;
+  let labelH=parseFloat(document.getElementById('label-h-mm')?.value)||25;
+  try{localStorage.setItem('label_w_mm',labelW);localStorage.setItem('label_h_mm',labelH);}catch(e){}
+  let scale=Math.min(labelW,labelH)/25;
+  let codeSize=(7*scale).toFixed(1);
+  let nameSize=(5*scale).toFixed(1);
+  let infoSize=(4.5*scale).toFixed(1);
+  let usedSize=(4*scale).toFixed(1);
+  let receiveBy=(document.getElementById('label-initials')?.value||getUserInitials()).trim().toUpperCase();
+  if(receiveBy)setUserInitials(receiveBy);
+  let barcodeW=Math.max(labelW-6,10).toFixed(1);
+  let barcodeH=Math.max(labelH*0.32,6).toFixed(1);
+  let nameMaxH=(labelH*0.32).toFixed(1);
+
+  let win=window.open('','_blank','width=800,height=600');
+  if(!win){
+    toast('❌ Browser បានទប់ស្កាត់ Popup! សូម Allow Popups សម្រាប់ site នេះ ហើយសាកល្បងម្តងទៀត','error');
+    return;
+  }
+  win.document.write('<!DOCTYPE html><html><head><title>Loading...</title></head><body style="font-family:Arial;padding:40px;text-align:center;color:#888">Preparing barcodes...</body></html>');
+
+  let barcodeItems=[];
+  items.forEach((b,idx)=>{
+    let labelQty=parseInt(document.getElementById('hbl-labelqty-'+idx)?.value)||0;
+    for(let n=0;n<labelQty;n++){
+      barcodeItems.push(b);
+    }
+  });
+  if(!barcodeItems.length){
+    win.close();
+    toast('គ្មាន Label Qty ដែលធំជាង 0!','error');
+    return;
+  }
+  closeModal();
+
+  let labels=barcodeItems.map(b=>`
+    <div class="label">
+      ${b.supplier?'<div class="label-supplier-vert"><span>'+b.supplier+'</span></div>':''}
+      ${b.source?'<div class="label-source-vert"><span>'+b.source+'</span></div>':''}
+      <div class="label-inner" style="margin-left:${b.supplier?'4mm':'0'};margin-right:${b.source?'4mm':'0'}">
+        <div class="label-code">${b.code}</div>
+        <div class="label-name">${b.name}</div>
+        <svg class="barcode" data-code="${b.code}"></svg>
+        <div class="label-info">
+          <div><b>Date Receive:</b> ${fd(b.datein)} <b style="margin-left:5px">By:</b> ${receiveBy}</div>
+          <div class="label-used"><b>Date Open:</b> _______ / _______ / ___________</div>
+        </div>
+      </div>
+    </div>`).join('');
+
+  win.document.open();
+  win.document.write(`<!DOCTYPE html><html><head><title>Barcodes — Stock In History (Selected)</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#fff;margin:10px}
+    .labels{display:flex;flex-wrap:wrap;gap:3mm}
+    .label{position:relative;border:0.5px solid #999;border-radius:2px;padding:1.5mm 2mm;width:${labelW}mm;height:${labelH}mm;text-align:center;page-break-inside:avoid;background:#fff;overflow:hidden}
+    .label-supplier-vert{position:absolute;left:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:0.5px dotted #ccc;writing-mode:vertical-rl;transform:rotate(180deg)}
+    .label-supplier-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
+    .label-source-vert{position:absolute;right:0;top:0.5mm;bottom:0.5mm;width:4mm;display:flex;align-items:center;justify-content:center;overflow:hidden;border-left:0.5px dotted #ccc;writing-mode:vertical-rl}
+    .label-source-vert span{white-space:nowrap;font-size:${(6.5*scale).toFixed(1)}pt;font-weight:600;color:#444;letter-spacing:.02em}
+    .label-inner{height:100%;display:flex;flex-direction:column;justify-content:space-between}
+    .label-code{font-size:${codeSize}pt;font-weight:800;color:#185fa5;letter-spacing:.03em}
+    .label-name{font-size:${nameSize}pt;color:#333;line-height:1.2;font-weight:500;overflow:hidden;max-height:${nameMaxH}mm}
+    .barcode{width:${barcodeW}mm;height:${barcodeH}mm}
+    .label-info{font-size:${infoSize}pt;color:#444;text-align:left;line-height:1.5}
+    .label-used{border-top:0.5px dashed #bbb;padding-top:0.5mm;font-size:${usedSize}pt;color:#555}
+    .barcode-error{font-size:${codeSize}pt;font-weight:700;letter-spacing:2px;padding:2mm 0;color:#222;font-family:monospace}
+    @media print{
+      @page{size:${labelW}mm ${labelH}mm;margin:0}
+      body{margin:0}
+      .no-print{display:none}
+      .labels{display:block;gap:0}
+      .label{border:none;width:${labelW}mm;height:${labelH}mm;margin:0;page-break-after:always;page-break-inside:avoid}
+      .label:last-child{page-break-after:auto}
+    }
+  </style></head><body>
+  <div class="no-print" style="margin-bottom:10px">
+    <button onclick="window.print()" style="padding:8px 20px;background:#185fa5;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">🖨️ Print</button>
+    <span style="margin-left:10px;font-size:13px;color:#666">Stock In History (Selected) — ${barcodeItems.length} labels — ${labelW}×${labelH}mm</span>
     <span id="jsb-status" style="margin-left:10px;font-size:12px;color:#c0392b"></span>
   </div>
   <div class="labels">${labels}</div>
