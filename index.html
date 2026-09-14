@@ -92,6 +92,51 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 .login-logo{text-align:center;margin-bottom:24px}
 .login-logo h1{font-size:18px;font-weight:600;color:var(--blue);margin-top:8px}
 .login-logo p{font-size:12px;color:var(--muted);margin-top:3px}
+
+/* ===== Neumorphic (soft UI) restyle of the login FORM panel only —
+   scoped under #login-page so nothing else in the app is affected. ===== */
+#login-page .login-form-panel{background:#e6e9ec}
+#login-page .login-form-panel .login-box{
+  background:#e6e9ec;border-radius:28px;padding:40px 34px;
+  box-shadow:14px 14px 28px #c6c9cc,-14px -14px 28px #ffffff;
+}
+#login-page .login-form-icon{
+  width:72px;height:72px;border:none;background:#e6e9ec;color:var(--blue);
+  box-shadow:8px 8px 16px #c6c9cc,-8px -8px 16px #ffffff;
+  margin-bottom:18px;
+}
+#login-page .login-welcome{font-weight:700;color:#2b3436}
+#login-page .form-group label{color:#8a9296;font-size:11.5px;letter-spacing:.02em}
+#login-page .input-icon-wrap{border-radius:16px}
+#login-page .input-icon-wrap input{
+  background:#e6e9ec;border:none;border-radius:16px;color:#2b3436;
+  box-shadow:inset 5px 5px 10px #c6c9cc,inset -5px -5px 10px #ffffff;
+}
+#login-page .input-icon-wrap input:focus{
+  box-shadow:inset 6px 6px 12px #c1c4c7,inset -6px -6px 12px #ffffff;outline:none;
+}
+#login-page .input-icon-wrap input::placeholder{color:#9aa1a4}
+#login-page .input-icon-wrap i:first-child{color:#8a9296}
+/* Remember-me checkbox restyled as a soft toggle switch (same <input>, no HTML change) */
+#login-page .login-remember input{
+  appearance:none;-webkit-appearance:none;width:38px;height:22px;border-radius:22px;
+  background:#e6e9ec;box-shadow:inset 3px 3px 6px #c6c9cc,inset -3px -3px 6px #ffffff;
+  position:relative;cursor:pointer;flex-shrink:0;transition:background .15s;
+}
+#login-page .login-remember input::before{
+  content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:#fff;box-shadow:2px 2px 4px rgba(0,0,0,.15);transition:left .15s;
+}
+#login-page .login-remember input:checked{background:var(--blue)}
+#login-page .login-remember input:checked::before{left:19px}
+#login-page .login-btn{
+  background:var(--blue);border:none;border-radius:16px;padding:13px;
+  box-shadow:6px 6px 14px #c6c9cc,-6px -6px 14px #ffffff;
+  transition:box-shadow .15s,transform .1s;
+}
+#login-page .login-btn:hover{box-shadow:4px 4px 10px #c6c9cc,-4px -4px 10px #ffffff;transform:translateY(1px)}
+#login-page .login-btn:active{box-shadow:inset 4px 4px 8px #0b5a6f,inset -4px -4px 8px #157ea3}
+
 .form-group{margin-bottom:14px}
 .form-group label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-weight:500}
 .form-group input{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);transition:border .15s}
@@ -5203,7 +5248,10 @@ async function viewRequestDetail(id){
           `:'—'}
         </td>
       `:''}
-      ${isApproved?`<td style="padding:8px 10px;text-align:center"><button class="btn btn-xs btn-warning" onclick="disapproveItem('${id}','${ri.id||'legacy'}',${ri.qty_given||0},'${ri.item_code}')"><i class="ti ti-arrow-back-up"></i></button></td>`:''}
+      ${isApproved?`<td style="padding:8px 10px;text-align:center;white-space:nowrap">
+        <button class="btn btn-xs btn-primary" onclick="editApprovedItemQty('${id}','${ri.id||'legacy'}','${ri.item_code}',${ri.qty_given||0})" title="Edit Qty"><i class="ti ti-edit"></i></button>
+        <button class="btn btn-xs btn-warning" onclick="disapproveItem('${id}','${ri.id||'legacy'}',${ri.qty_given||0},'${ri.item_code}')" title="Disapprove"><i class="ti ti-arrow-back-up"></i></button>
+      </td>`:''}
     </tr>`;
   }));
 
@@ -5499,6 +5547,17 @@ async function disapproveItem(reqId, riId, qtyGiven, itemCode){
     if(updErr){toast('❌ ការត្រឡប់ Stock បរាជ័យ! — '+updErr.message,'error');return;}
     await syncMonthlyStock(itemCode,item.name||itemCode,item.category||'','out',-qtyGiven);
   }
+  // Restore the specific lot's balance too (previously only the item total was
+  // restored — the lot itself stayed short by qtyGiven until a later sync,
+  // which could make FEFO show an incorrect/exhausted lot after a disapprove).
+  let {data:riRow}=riId!=='legacy'?await db.from('request_items').select('item_lot').eq('id',riId).single():{data:null};
+  let lotNo=riRow?.item_lot;
+  if(lotNo){
+    let {data:lotRow}=await db.from('item_lots').select('*').eq('item_code',itemCode).eq('lot',lotNo).single();
+    if(lotRow){
+      await db.from('item_lots').update({qty_out:Math.max(0,(lotRow.qty_out||0)-qtyGiven),balance:(lotRow.balance||0)+qtyGiven,is_active:true}).eq('id',lotRow.id);
+    }
+  }
   // Remove stock_out_log for this item+request
   await db.from('stock_out_log').delete().eq('request_id',reqId).eq('item_code',itemCode);
   // Reset request_item
@@ -5511,6 +5570,96 @@ async function disapproveItem(reqId, riId, qtyGiven, itemCode){
   closeModal();
   loadAdminRequests();
   toast('Disapproved! Stock +'+qtyGiven+' ['+itemCode+'] ត្រឡប់មកវិញ!','info');
+}
+
+// Lets an admin correct an already-Approved item's given quantity in one step,
+// instead of Disapprove (revert to Pending) → re-pick FEFO lot → re-Approve.
+// Adjusts item balance, the specific lot's balance, request_items.qty_given,
+// and the stock_out_log entry all together so they stay consistent.
+async function editApprovedItemQty(reqId, riId, itemCode, oldQty){
+  let input=prompt('កែ Qty ដែលបានផ្តល់ សម្រាប់ '+itemCode+' (បច្ចុប្បន្ន: '+oldQty+')',oldQty);
+  if(input===null)return; // cancelled
+  let newQty=parseInt(input);
+  if(isNaN(newQty)||newQty<0){toast('Qty មិនត្រឹមត្រូវ!','error');return}
+  if(newQty===oldQty){toast('Qty ដដែល — គ្មានអ្វីផ្លាស់ប្តូរ','info');return}
+  let diff=newQty-oldQty; // positive = giving more (deduct more stock), negative = giving less (restore stock)
+
+  let {data:item}=await db.from('items').select('*').eq('code',itemCode).single();
+  if(!item){toast('❌ រកមិនឃើញ item!','error');return}
+
+  let {data:riRow}=riId!=='legacy'?await db.from('request_items').select('item_lot').eq('id',riId).single():{data:null};
+  let lotNo=riRow?.item_lot;
+  let lotRow=null;
+  if(lotNo){
+    let {data}=await db.from('item_lots').select('*').eq('item_code',itemCode).eq('lot',lotNo).single();
+    lotRow=data;
+  }
+
+  if(diff>0){
+    // Giving MORE than before — need enough spare stock to cover the increase
+    if((item.balance||0)<diff){toast('❌ Stock មិនគ្រប់! Balance សល់ត្រឹមតែ '+item.balance+' (ត្រូវការបន្ថែម '+diff+')','error');return}
+    // The lot originally tied to this request might not have enough left on
+    // its own (it can get drawn down by other transactions in the meantime)
+    // even though the item's total balance across all lots does. Rather than
+    // blocking the correction outright, fall back to FEFO — pick whichever
+    // lot (earliest expiry first) actually has enough to cover the increase.
+    if(!lotRow||(lotRow.balance||0)<diff){
+      let {data:altLots}=await db.from('item_lots').select('*').eq('item_code',itemCode).gt('balance',0).order('expiry',{ascending:true});
+      let fefoLot=(altLots||[]).find(l=>(l.balance||0)>=diff);
+      if(fefoLot){
+        lotRow=fefoLot;
+        lotNo=fefoLot.lot;
+      } else {
+        // No single lot covers the full increase, but item.balance already
+        // confirmed enough exists overall — proceed without lot-level tracking
+        // for this correction rather than blocking it.
+        lotRow=null;
+      }
+    }
+  }
+
+  let {error:updErr}=await db.from('items').update({balance:Math.max(0,(item.balance||0)-diff),stock_out:Math.max(0,(item.stock_out||0)+diff)}).eq('code',itemCode);
+  if(updErr){toast('❌ Update Balance បរាជ័យ! — '+updErr.message,'error');return}
+  await syncMonthlyStock(itemCode,item.name||itemCode,item.category||'','out',diff);
+
+  if(lotRow){
+    await db.from('item_lots').update({qty_out:Math.max(0,(lotRow.qty_out||0)+diff),balance:Math.max(0,(lotRow.balance||0)-diff),is_active:((lotRow.balance||0)-diff)>0}).eq('id',lotRow.id);
+  }
+
+  if(riId!=='legacy'){
+    let riUpdate={qty_given:newQty};
+    if(lotRow)riUpdate.item_lot=lotNo; // reflect the FEFO fallback lot if one was used
+    let {error:riErr}=await db.from('request_items').update(riUpdate).eq('id',riId);
+    if(riErr){toast('⚠️ Balance បានកែប៉ុន្តែ request_items update បរាជ័យ! — '+riErr.message,'error');return}
+  }
+
+  // Keep the Stock Out History log in sync. If the item was originally given
+  // 0 (approveReqWithItems skips inserting a log row for 0-qty items), there's
+  // no existing row to update — insert a fresh one instead so the correction
+  // actually shows up in Stock Out History. If it's being corrected back down
+  // to 0, remove the row rather than leaving a stale "0 qty" entry behind.
+  let {data:existingLog}=await db.from('stock_out_log').select('id').eq('request_id',reqId).eq('item_code',itemCode).maybeSingle();
+  if(existingLog){
+    if(newQty>0){
+      let soUpdate={qty:newQty};
+      if(lotRow)soUpdate.lot=lotNo;
+      let {error:soErr}=await db.from('stock_out_log').update(soUpdate).eq('id',existingLog.id);
+      if(soErr)console.error('[editApprovedItemQty] stock_out_log update failed:',itemCode,soErr.message);
+    } else {
+      let {error:soErr}=await db.from('stock_out_log').delete().eq('id',existingLog.id);
+      if(soErr)console.error('[editApprovedItemQty] stock_out_log delete failed:',itemCode,soErr.message);
+    }
+  } else if(newQty>0){
+    let {data:req}=await db.from('requests').select('department,ward').eq('id',reqId).single();
+    let dateStr=today().toISOString().split('T')[0];
+    let {error:soErr}=await db.from('stock_out_log').insert({date:dateStr,item_code:itemCode,item_name:item.name||itemCode,lot:lotNo||'',item_ref:lotRow?.ref||item.ref||'',unit:item.unit||'',size:item.size||'',qty:newQty,expiry:item.expiry,item_expiry:lotRow?.expiry||null,source:lotRow?.source||item.source||'',department:req?.department||'',ward:req?.ward||'',request_id:reqId,created_by:CU.id});
+    if(soErr)console.error('[editApprovedItemQty] stock_out_log insert failed:',itemCode,soErr.message);
+  }
+
+  await loadMeta();
+  closeModal();
+  loadAdminRequests();
+  toast('✓ Qty កែជោគជ័យ! ['+itemCode+'] '+oldQty+' → '+newQty+(diff>0?' (Stock -'+diff+')':' (Stock +'+(-diff)+')'),'success');
 }
 
 async function rejectReqDirect(id){
@@ -9821,6 +9970,7 @@ function filterLowStock(){
   document.getElementById('alert-low').innerHTML=filtered.length?display.map(i=>{
     let need=Math.max(0,i.min_stock-i.balance+10);
     return`<tr>
+      <td><input type="checkbox" class="low-chk" data-code="${i.code}" data-name="${i.name.replace(/"/g,'&quot;')}" data-need="${need}" data-source="${i.source||''}" data-category="${i.category||''}" data-supplier="${i.supplier||''}" data-unit="${i.unit||''}" data-size="${i.size||''}" onchange="updatePOCount()" style="width:16px;height:16px;cursor:pointer"></td>
       <td><code>${i.code}</code></td><td style="font-weight:600">${i.name}</td>
       <td style="font-size:12px;color:var(--muted)">${i.category||'-'}</td>
       <td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
@@ -9834,9 +9984,9 @@ function filterLowStock(){
         <button class="btn btn-xs btn-warning" onclick="closeModal();goPage('stockin')"><i class="ti ti-arrow-bar-to-down"></i> Stock In</button>
       </td>
     </tr>`;
-  }).join('')+(filtered.length>50?`<tr><td colspan="12" style="text-align:center;padding:10px">
+  }).join('')+(filtered.length>50?`<tr><td colspan="13" style="text-align:center;padding:10px">
     <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600" onclick="showAllLowStock()">មើលទាំងអស់ ${filtered.length} →</span>
-  </td></tr>`:''):`<tr><td colspan="12"><div class="empty">គ្មាន low stock សម្រាប់ filter នេះ</div></td></tr>`;
+  </td></tr>`:''):`<tr><td colspan="13"><div class="empty">គ្មាន low stock សម្រាប់ filter នេះ</div></td></tr>`;
 }
 
 function showAllLowStock(){
@@ -9844,6 +9994,7 @@ function showAllLowStock(){
   document.getElementById('alert-low').innerHTML=low.map(i=>{
     let need=Math.max(0,i.min_stock-i.balance+10);
     return`<tr>
+      <td><input type="checkbox" class="low-chk" data-code="${i.code}" data-name="${i.name.replace(/"/g,'&quot;')}" data-need="${need}" data-source="${i.source||''}" data-category="${i.category||''}" data-supplier="${i.supplier||''}" data-unit="${i.unit||''}" data-size="${i.size||''}" onchange="updatePOCount()" style="width:16px;height:16px;cursor:pointer"></td>
       <td><code>${i.code}</code></td><td style="font-weight:600">${i.name}</td>
       <td style="font-size:12px;color:var(--muted)">${i.category||'-'}</td>
       <td style="font-size:12px">${i.supplier||'-'}</td><td>${srcBadge(i.source)}</td>
