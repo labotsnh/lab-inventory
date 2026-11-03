@@ -10821,11 +10821,15 @@ function visSelectAllVisibleItems(checked){
 
 async function saveUserVisibility(userId){
   // Delete existing for this user
-  await db.from('user_item_visibility').delete().eq('user_id',userId);
   let toInsert=[];
   _visSelectedCats.forEach(c=>toInsert.push({user_id:userId,visibility_type:'category',category:c,item_code:null}));
   _visSelectedItems.forEach(code=>toInsert.push({user_id:userId,visibility_type:'item',category:null,item_code:code}));
-  if(toInsert.length)await db.from('user_item_visibility').insert(toInsert);
+  let {error:delErr}=await db.from('user_item_visibility').delete().eq('user_id',userId);
+  if(delErr){toast('Save បរាជ័យ: '+delErr.message,'error');return;}
+  if(toInsert.length){
+    let {error:insErr}=await db.from('user_item_visibility').insert(toInsert);
+    if(insErr){toast('Save បរាជ័យ: '+insErr.message+' — Visibility ត្រូវបានលុប សូម Save ម្តងទៀត','error');await loadVisibility();return;}
+  }
   closeModal();
   await loadVisibility();
   toast('Visibility បានរក្សាទុក!');
