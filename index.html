@@ -6722,7 +6722,9 @@ async function getMyPersonalTransactions(){
   soLogs.forEach(l=>{
     if(myReqIds.includes(l.request_id)){
       personalTx.push({item_code:l.item_code,qty:l.qty||0,date:l.date,dir:'in'});
-    } else if(l.created_by===CU.id&&!l.request_id){
+    } else if(l.created_by===CU.id&&!l.request_id&&l.source!=='PCS Withdraw'){
+      // 'PCS Withdraw' rows are counted in PCS (pieces), not whole units, so they are
+      // excluded here; opening a pack is logged separately as 1 unit ('PCS Pack Open').
       personalTx.push({item_code:l.item_code,qty:l.qty||0,date:l.date,dir:'out'});
     }
   });
@@ -7048,11 +7050,21 @@ async function loadPcsWithdraw(){
   }
   populatePcsSetupSelect();
   renderPcsSetupList();
+  await refreshPcsPersonalBal();
   await renderOpenPacksTable();
   renderPcsQuickGrid();
   await populatePcsStaffSelect();
   await loadPcsWithdrawHistory();
   onPcsItemChange();
+}
+
+// Personal unit balance per item (received via approved requests / own Stock In, minus own usage)
+async function refreshPcsPersonalBal(){
+  let {personalTx}=await getMyPersonalTransactions();
+  let m={};
+  personalTx.forEach(t=>{m[t.item_code]=(m[t.item_code]||0)+(t.dir==='in'?t.qty:-t.qty);});
+  window._pcsPersonalBal=m;
+  return m;
 }
 
 async function populatePcsStaffSelect(){
@@ -7282,6 +7294,7 @@ async function renderOpenPacksTable(){
     body.innerHTML='<tr><td colspan="7"><div class="empty">Table <code>opened_pack_log</code> មិនទាន់ត្រូវបានបង្កើតទេ — សូមប្រាប់ admin ឱ្យរត់ SQL។</div></td></tr>';
     return;
   }
+  if(CU&&CU.role==='user')packs=(packs||[]).filter(p=>p.opened_by===CU.id); // personal packs only
   window._openPacks=packs||[];
   body.innerHTML=(packs&&packs.length)?packs.map(p=>`<tr>
       <td><code>${p.item_code}</code></td>
@@ -7308,7 +7321,7 @@ function onPcsItemChange(){
     infoBox.innerHTML=`<i class="ti ti-package" style="color:#0f8a6e"></i> <b>Pack កំពុងបើក:</b> Lot ${openPack.lot||'-'} — សល់ <b>${openPack.remaining_pcs}/${openPack.total_pcs}</b> ${item?.pcs_unit_label||'pcs'}`;
     if(lotWrap)lotWrap.style.display='none';
   } else {
-    infoBox.innerHTML=`<i class="ti ti-alert-circle" style="color:#854f0b"></i> គ្មាន Pack កំពុងបើកទេសម្រាប់ item នេះ — ប្រព័ន្ធនឹង <b>បើក Pack ថ្មី</b> ដោយស្វ័យប្រវត្តិ ហើយកាត់ Balance <b>1 ${item?.unit||'kit'}</b>`;
+    infoBox.innerHTML=`<i class="ti ti-alert-circle" style="color:#854f0b"></i> គ្មាន Pack កំពុងបើកទេសម្រាប់ item នេះ — ប្រព័ន្ធនឹង <b>បើក Pack ថ្មី</b> ដោយស្វ័យប្រវត្តិ ហើយកាត់ Balance ផ្ទាល់ខ្លួន <b>1 ${item?.unit||'kit'}</b> (មាន <b>${window._pcsPersonalBal?.[code]??0}</b>)`;
     if(lotWrap)lotWrap.style.display='block';
   }
 }
@@ -7327,11 +7340,13 @@ async function submitPcsWithdraw(){
   let lotsUsed=[]; // {lot, qty} for audit note
   let remaining=qtyNeeded;
   let safety=0;
-  let curBalance=item.balance||0;
+  // Staff use their PERSONAL balance (and personal packs); lab stock is never touched.
+  let pb=await refreshPcsPersonalBal();
+  let curBalance=pb[code]||0;
 
   while(remaining>0){
     safety++;if(safety>20){toast('❌ ចំនួន PCS ច្រើនពេក! សូមបំបែកជាដងច្រើន','error');return;}
-    let {data:openPack}=await db.from('opened_pack_log').select('*').eq('item_code',code).eq('status','Open').order('opened_at',{ascending:true}).limit(1).maybeSingle();
+    let {data:openPack}=await db.from('opened_pack_log').select('*').eq('item_code',code).eq('status','Open').eq('opened_by',CU.id).order('opened_at',{ascending:true}).limit(1).maybeSingle();
     if(openPack&&openPack.remaining_pcs>0){
       let take=Math.min(remaining,openPack.remaining_pcs);
       let newRemaining=openPack.remaining_pcs-take;
@@ -7344,7 +7359,7 @@ async function submitPcsWithdraw(){
     } else {
       // Need to open a new pack — requires 1 whole unit available in stock
       if(curBalance<1){
-        toast(`❌ Balance មិនគ្រប់គ្រាន់សម្រាប់បើក Pack ថ្មី! (Balance: ${curBalance} ${item.unit||'kit'})`,'error');
+        toast(`❌ Balance ផ្ទាល់ខ្លួនមិនគ្រប់គ្រាន់សម្រាប់បើក Pack ថ្មី! (Balance: ${curBalance} ${item.unit||'kit'})`,'error');
         return;
       }
       let {data:newPack,error:e2}=await db.from('opened_pack_log').insert({
@@ -7354,11 +7369,20 @@ async function submitPcsWithdraw(){
         opened_by:CU.id,opened_by_name:CU.full_name||CU.username,status:'Open'
       }).select().single();
       if(e2){toast('❌ Error opening pack: '+e2.message,'error');return;}
-      // Deduct 1 whole unit from item balance (kit consumed from stock)
-      let {error:e3}=await db.from('items').update({balance:curBalance-1,stock_out:(item.stock_out||0)+1}).eq('code',code);
-      if(e3){toast('❌ Error updating balance: '+e3.message,'error');return;}
-      await syncMonthlyStock(code,item.name,item.category||'','out',1);
-      curBalance-=1;item.balance=curBalance;
+      // Deduct 1 whole unit from the staff's PERSONAL balance (logged as 1 unit out)
+      let {error:e3}=await db.from('stock_out_log').insert({
+        date:new Date().toISOString().split('T')[0],
+        item_code:code,item_name:item.name,lot:newLot||'',
+        unit:item.unit||'',size:item.size,qty:1,
+        source:'PCS Pack Open',
+        department:CU.department||'',ward:CU.ward||'',
+        created_by:CU.id
+      });
+      if(e3){
+        await db.from('opened_pack_log').delete().eq('id',newPack.id); // best-effort rollback
+        toast('❌ Error updating balance: '+e3.message,'error');return;
+      }
+      curBalance-=1;
       // loop again — will now find this pack as the open one
     }
   }
@@ -7377,9 +7401,10 @@ async function submitPcsWithdraw(){
   });
   if(soErr){
     console.error('[submitPcsWithdraw] stock_out_log insert failed:',soErr.message);
-    toast('⚠️ Balance បាន Update ប៉ុន្តែ History Log បរាជ័យ! — '+soErr.message,'error');
+    toast('⚠️ ការដក PCS បានកត់ ប៉ុន្តែ History Log បរាជ័យ! — '+soErr.message,'error');
   }
 
+  await refreshPcsPersonalBal();
   document.getElementById('pcs-qty').value=1;
   document.getElementById('pcs-new-lot').value='';
   toast(`✅ បានដក ${qtyNeeded} ${item.pcs_unit_label||'pcs'} (${lotNote})`,'success');
