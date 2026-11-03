@@ -2020,6 +2020,8 @@ async function doLogin(){
     try{await webauthnEnroll(u,p);}catch(e){console.error('[WebAuthn] enroll failed:',e);}
   }
   CU=data;
+  // Always open Master Inventory on the CURRENT month after login (don't carry over last session's month)
+  try{localStorage.removeItem('inv_monthly_sel');}catch(e){}
   document.getElementById('login-page').style.display='none';
   document.getElementById('main-app').style.display='flex';
   setupNav();
