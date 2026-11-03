@@ -6198,8 +6198,23 @@ async function staffScanStockOut(val){
   }
   if(!item){toast('រក Item មិនឃើញ: '+val,'error');return;}
   // Load lots for FEFO
-  let {data:lots}=await db.from('item_lots').select('*').eq('item_code',item.code).gt('balance',0).order('expiry',{ascending:true});
-  lots=lots||[];
+  // PERSONAL balance (what THIS staff received minus what they used) — not the lab-wide stock
+  let {personalTx,soLogs:mySo,siLogs:myIn,myReqIds}=await getMyPersonalTransactions();
+  let pBal=personalTx.filter(t=>t.item_code===item.code).reduce((a,t)=>a+(t.dir==='in'?t.qty:-t.qty),0);
+  let lotMap={};
+  let addLot=(l,sign)=>{
+    if(l.item_code!==item.code)return;
+    let k=l.lot||'';
+    if(!lotMap[k])lotMap[k]={lot:k,expiry:l.item_expiry||l.expiry||'',balance:0};
+    if(!lotMap[k].expiry)lotMap[k].expiry=l.item_expiry||l.expiry||'';
+    lotMap[k].balance+=sign*(l.qty||0);
+  };
+  (myIn||[]).forEach(l=>addLot(l,1));
+  (mySo||[]).forEach(l=>{
+    if(myReqIds.includes(l.request_id))addLot(l,1);
+    else if(l.created_by===CU.id&&!l.request_id)addLot(l,-1);
+  });
+  let lots=Object.values(lotMap).filter(l=>l.balance>0).sort((x,y)=>(x.expiry||'9999').localeCompare(y.expiry||'9999'));
   // Load THIS staff's own personal "ជ្រើសរើស បុគ្គលិក" list (private per user —
   // each staff only sees names they themselves added, not other staff's names)
   let staffRecipients=await getListItems('staff_recipient_'+CU.id);
@@ -6223,8 +6238,8 @@ async function staffScanStockOut(val){
         <div style="font-size:12px;color:var(--muted);margin-top:2px">
           Category: <strong>${item.category||'-'}</strong> &nbsp;·&nbsp;
           Unit: <strong>${item.unit||'-'}</strong> &nbsp;·&nbsp;
-          Balance: <strong style="color:${item.balance<=0?'#a32d2d':item.balance<=item.min_stock?'#854f0b':'#3b6d11'};font-size:15px">${item.balance}</strong> ${item.unit||''}
-          ${item.balance<=0?'<span style="background:#fcebeb;color:#a32d2d;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:6px">Out of Stock</span>':item.balance<=item.min_stock?'<span style="background:#faeeda;color:#854f0b;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:6px">Low Stock</span>':''}
+          Balance (ផ្ទាល់ខ្លួន): <strong style="color:${pBal<=0?'#a32d2d':'#3b6d11'};font-size:15px">${pBal}</strong> ${item.unit||''}
+          ${pBal<=0?'<span style="background:#fcebeb;color:#a32d2d;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:6px">Out of Stock</span>':''}
         </div>
       </div>
     </div>
@@ -6243,7 +6258,7 @@ async function staffScanStockOut(val){
             ⭐ FEFO: Lot <strong style="color:#185fa5">${lots[0]?.lot||'-'}</strong> · Exp: ${fd(lots[0]?.expiry)} · Balance: <strong style="color:#3b6d11">${lots[0]?.balance||0}</strong>
           </div>`
           :`<div style="font-size:12px;color:var(--muted);padding:8px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
-            <i class="ti ti-info-circle"></i> គ្មាន lot tracking — ប្រើ item balance: <strong>${item.balance}</strong>
+            <i class="ti ti-info-circle"></i> គ្មាន lot tracking — ប្រើ item balance: <strong>${pBal}</strong>
           </div>`}
       </div>
     </div>
@@ -6251,7 +6266,7 @@ async function staffScanStockOut(val){
     <!-- Action Row -->
     <div style="display:flex;align-items:center;gap:12px;background:var(--bg);border-radius:10px;padding:12px 16px;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:600;white-space:nowrap;color:var(--text)">Qty Used:</div>
-      <input type="number" id="so-used-qty" value="1" min="1" max="${item.balance}" 
+      <input type="number" id="so-used-qty" value="1" min="1" max="${pBal}" 
         style="width:100px;text-align:center;font-size:18px;font-weight:700;padding:8px">
       <div style="font-size:13px;font-weight:600;white-space:nowrap;color:var(--text)">បុគ្គលិក:</div>
       <select id="so-staff-select" style="width:110px;padding:6px 10px;font-size:13px;font-weight:600;border-radius:8px;border:1.5px solid var(--border)">
@@ -6264,7 +6279,7 @@ async function staffScanStockOut(val){
       <button class="btn" onclick="document.getElementById('so-scan-result').style.display='none';document.getElementById('so-scan-input').value='';document.getElementById('so-search-drop').style.display='none'" style="padding:10px 20px">
         Cancel
       </button>
-      <button class="btn btn-danger" onclick="staffConfirmStockOut('${item.code}','${item.name.replace(/'/g,"\\'")}','${item.unit||''}','${item.source||''}',${item.balance})"
+      <button class="btn btn-danger" onclick="staffConfirmStockOut('${item.code}','${item.name.replace(/'/g,"\\'")}','${item.unit||''}','${item.source||''}',${pBal})"
         style="padding:10px 28px;font-size:14px;font-weight:700">
         <i class="ti ti-arrow-bar-up"></i> Used / ដក Stock Out
       </button>
@@ -6316,24 +6331,17 @@ async function staffConfirmStockOut(code,name,unit,source,maxBal){
   let staffName=staffSel?.selectedOptions[0]?.dataset.name||CU.full_name||CU.username;
   let dept=CU.department||CU.ward||'';
   let today2=new Date().toISOString().split('T')[0];
-  // Update item balance
+  // Staff usage is deducted from the staff's PERSONAL balance only (computed from
+  // stock_out_log). Lab-wide items/item_lots balances are NOT touched — Admin already
+  // deducted those when approving the request.
   let item=allItems.find(i=>i.code===code);
   if(!item)return;
-  let {data:freshIt}=await db.from('items').select('balance,stock_out,category').eq('code',code).single();
-  let curBal2=freshIt?.balance??item.balance;
-  let curOut2=freshIt?.stock_out??item.stock_out;
-  if(curBal2<qty){toast('Stock មិនគ្រប់! Balance: '+curBal2,'error');return;}
-  let newBal=curBal2-qty;
-  let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(curOut2||0)+qty}).eq('code',code);
-  if(updErr){toast('❌ Stock Out បរាជ័យ! — '+updErr.message,'error');return;}
-  await syncMonthlyStock(code,name,freshIt?.category||item.category||'','out',qty);
-  // Update lot balance
-  if(lot){
-    let {data:existLot}=await db.from('item_lots').select('*').eq('item_code',code).eq('lot',lot).single();
-    if(existLot){
-      await db.from('item_lots').update({qty_out:(existLot.qty_out||0)+qty,balance:(existLot.balance||0)-qty}).eq('id',existLot.id);
-    }
-  }
+  // Re-verify against the freshest personal balance (maxBal is from when the card opened)
+  let {personalTx}=await getMyPersonalTransactions();
+  let pBal=personalTx.filter(t=>t.item_code===code).reduce((a,t)=>a+(t.dir==='in'?t.qty:-t.qty),0);
+  if(pBal<qty){toast('Balance ផ្ទាល់ខ្លួនមិនគ្រប់! Balance: '+pBal,'error');return;}
+  if(lot&&lotBal<qty){toast('Lot '+lot+' Balance មិនគ្រប់! Balance: '+lotBal,'error');return;}
+  let newBal=pBal-qty;
   // Log
   let {error:soErr}=await db.from('stock_out_log').insert({
     item_code:code,item_name:name,lot,item_expiry:expiry||null,
@@ -6343,17 +6351,12 @@ async function staffConfirmStockOut(code,name,unit,source,maxBal){
   });
   if(soErr){
     console.error('[staffConfirmStockOut] stock_out_log insert failed:',soErr.message);
-    toast('⚠️ Balance បាន Update ប៉ុន្តែ History Log បរាជ័យ! — '+soErr.message,'error');
+    toast('❌ Stock Out បរាជ័យ! — '+soErr.message,'error');
+    return;
   }
-  await loadMeta();
   document.getElementById('so-scan-result').style.display='none';
   loadMyStockOut();
-  // Refresh balance dashboard if loaded
-  if(window._myDashItems){
-    let {data:items}=await db.from('items').select('*').order('category').order('name');
-    window._myDashItems=items||[];
-    renderMyBalance();
-  }
+  if(typeof loadMyDashboard==='function'&&window._myDashItems)loadMyDashboard();
   toast(`✅ ${name} x${qty} ដក Stock Out រួច! Balance សល់: ${newBal}`,'success');
 }
 
@@ -10821,11 +10824,15 @@ function visSelectAllVisibleItems(checked){
 
 async function saveUserVisibility(userId){
   // Delete existing for this user
-  await db.from('user_item_visibility').delete().eq('user_id',userId);
   let toInsert=[];
   _visSelectedCats.forEach(c=>toInsert.push({user_id:userId,visibility_type:'category',category:c,item_code:null}));
   _visSelectedItems.forEach(code=>toInsert.push({user_id:userId,visibility_type:'item',category:null,item_code:code}));
-  if(toInsert.length)await db.from('user_item_visibility').insert(toInsert);
+  let {error:delErr}=await db.from('user_item_visibility').delete().eq('user_id',userId);
+  if(delErr){toast('Save បរាជ័យ: '+delErr.message,'error');return;}
+  if(toInsert.length){
+    let {error:insErr}=await db.from('user_item_visibility').insert(toInsert);
+    if(insErr){toast('Save បរាជ័យ: '+insErr.message+' — Visibility ត្រូវបានលុប សូម Save ម្តងទៀត','error');await loadVisibility();return;}
+  }
   closeModal();
   await loadVisibility();
   toast('Visibility បានរក្សាទុក!');
