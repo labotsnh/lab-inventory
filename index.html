@@ -6331,24 +6331,17 @@ async function staffConfirmStockOut(code,name,unit,source,maxBal){
   let staffName=staffSel?.selectedOptions[0]?.dataset.name||CU.full_name||CU.username;
   let dept=CU.department||CU.ward||'';
   let today2=new Date().toISOString().split('T')[0];
-  // Update item balance
+  // Staff usage is deducted from the staff's PERSONAL balance only (computed from
+  // stock_out_log). Lab-wide items/item_lots balances are NOT touched — Admin already
+  // deducted those when approving the request.
   let item=allItems.find(i=>i.code===code);
   if(!item)return;
-  let {data:freshIt}=await db.from('items').select('balance,stock_out,category').eq('code',code).single();
-  let curBal2=freshIt?.balance??item.balance;
-  let curOut2=freshIt?.stock_out??item.stock_out;
-  if(curBal2<qty){toast('Stock មិនគ្រប់! Balance: '+curBal2,'error');return;}
-  let newBal=curBal2-qty;
-  let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(curOut2||0)+qty}).eq('code',code);
-  if(updErr){toast('❌ Stock Out បរាជ័យ! — '+updErr.message,'error');return;}
-  await syncMonthlyStock(code,name,freshIt?.category||item.category||'','out',qty);
-  // Update lot balance
-  if(lot){
-    let {data:existLot}=await db.from('item_lots').select('*').eq('item_code',code).eq('lot',lot).single();
-    if(existLot){
-      await db.from('item_lots').update({qty_out:(existLot.qty_out||0)+qty,balance:(existLot.balance||0)-qty}).eq('id',existLot.id);
-    }
-  }
+  // Re-verify against the freshest personal balance (maxBal is from when the card opened)
+  let {personalTx}=await getMyPersonalTransactions();
+  let pBal=personalTx.filter(t=>t.item_code===code).reduce((a,t)=>a+(t.dir==='in'?t.qty:-t.qty),0);
+  if(pBal<qty){toast('Balance ផ្ទាល់ខ្លួនមិនគ្រប់! Balance: '+pBal,'error');return;}
+  if(lot&&lotBal<qty){toast('Lot '+lot+' Balance មិនគ្រប់! Balance: '+lotBal,'error');return;}
+  let newBal=pBal-qty;
   // Log
   let {error:soErr}=await db.from('stock_out_log').insert({
     item_code:code,item_name:name,lot,item_expiry:expiry||null,
@@ -6358,17 +6351,12 @@ async function staffConfirmStockOut(code,name,unit,source,maxBal){
   });
   if(soErr){
     console.error('[staffConfirmStockOut] stock_out_log insert failed:',soErr.message);
-    toast('⚠️ Balance បាន Update ប៉ុន្តែ History Log បរាជ័យ! — '+soErr.message,'error');
+    toast('❌ Stock Out បរាជ័យ! — '+soErr.message,'error');
+    return;
   }
-  await loadMeta();
   document.getElementById('so-scan-result').style.display='none';
   loadMyStockOut();
-  // Refresh balance dashboard if loaded
-  if(window._myDashItems){
-    let {data:items}=await db.from('items').select('*').order('category').order('name');
-    window._myDashItems=items||[];
-    renderMyBalance();
-  }
+  if(typeof loadMyDashboard==='function'&&window._myDashItems)loadMyDashboard();
   toast(`✅ ${name} x${qty} ដក Stock Out រួច! Balance សល់: ${newBal}`,'success');
 }
 
