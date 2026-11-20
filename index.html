@@ -5243,8 +5243,8 @@ async function viewRequestDetail(id){
         <td style="padding:6px 10px;text-align:center;white-space:nowrap">
           ${lots.length>0?`
             <input type="number" id="qg-${idx}" data-ri="${ri.id}" data-code="${ri.item_code}"
-              value="${Math.min(ri.qty_requested,lots[0]?.balance||0)}"
-              min="0" max="${lots[0]?.balance||0}"
+              value="${Math.min(ri.qty_requested,totalBal)}"
+              min="0" max="${totalBal}" title="បើ Lot ដែលជ្រើសមិនគ្រប់ ប្រព័ន្ធនឹងដកបន្តពី Lot ផ្សេងតាម FEFO"
               style="width:70px;text-align:center;font-weight:700;font-size:14px;border:2px solid var(--green);border-radius:6px;padding:5px 8px;color:var(--green)">
             <div style="font-size:10px;color:var(--muted);margin-top:2px">/ ${ri.qty_requested} requested</div>
           `:'—'}
@@ -5449,9 +5449,10 @@ function updateReqLotQty(idx){
   let sel=document.getElementById('lot-sel-'+idx);
   if(!sel)return;
   let opt=sel.options[sel.selectedIndex];
-  let bal=parseInt(opt.dataset.bal)||0;
+  // Qty may exceed the picked lot's balance: the remainder is taken from the next lots (FEFO).
+  let total=Array.from(sel.options).reduce((a,o)=>a+(parseInt(o.dataset.bal)||0),0);
   let qgInp=document.getElementById('qg-'+idx);
-  if(qgInp){qgInp.max=bal;if(parseInt(qgInp.value)>bal)qgInp.value=bal;}
+  if(qgInp){qgInp.max=total;if(parseInt(qgInp.value)>total)qgInp.value=total;}
 }
 
 async function approveReqWithItems(reqId, itemCount){
@@ -5459,6 +5460,12 @@ async function approveReqWithItems(reqId, itemCount){
   let errors=[];
   let processedCount=0; // tracks items that ACTUALLY got a real stock movement
   let {data:req}=await db.from('requests').select('department,ward').eq('id',reqId).single();
+  // ===== PASS 1: build a FEFO allocation plan for EVERY item before writing anything =====
+  // The Lot picked in the dropdown is used first; if it doesn't hold enough, the rest is
+  // taken from the other lots in FEFO (earliest-expiry-first) order. Validating everything
+  // up front means a shortage on one item can no longer leave earlier items already
+  // deducted while the request stays Pending (which caused double deductions on retry).
+  let plans=[];
   for(let idx=0;idx<itemCount;idx++){
     let inp=document.getElementById('qg-'+idx);
     if(!inp)continue;
@@ -5466,16 +5473,37 @@ async function approveReqWithItems(reqId, itemCount){
     let code=inp.dataset.code;
     let qtyGiven=parseInt(inp.value)||0;
     if(qtyGiven<=0)continue;
-    // Get selected lot from FEFO dropdown
     let lotSel=document.getElementById('lot-sel-'+idx);
     let selectedOpt=lotSel?lotSel.options[lotSel.selectedIndex]:null;
-    let lotNo=selectedOpt?selectedOpt.dataset.lot:'';
-    let lotRef=selectedOpt?selectedOpt.dataset.ref:'';
-    let lotExpiry=selectedOpt?selectedOpt.dataset.expiry:null;
-    let lotId=selectedOpt?selectedOpt.dataset.id:'virtual';
-    let lotSource=selectedOpt?selectedOpt.dataset.source:'';
-    let lotBal=parseInt(selectedOpt?.dataset.bal||0);
-    if(lotBal<qtyGiven){errors.push(code+' Lot '+(lotNo||'')+' (Balance:'+lotBal+')');continue}
+    let selId=selectedOpt?selectedOpt.dataset.id:'virtual';
+    let allocs=[];
+    if(!selId||selId==='virtual'){
+      // item has no item_lots rows — single virtual lot from the dropdown
+      let vBal=parseInt(selectedOpt?.dataset.bal||0);
+      if(vBal<qtyGiven){errors.push(code+' (Qty '+qtyGiven+' > Balance '+vBal+')');continue}
+      allocs=[{id:'virtual',lot:selectedOpt?.dataset.lot||'',ref:selectedOpt?.dataset.ref||'',expiry:selectedOpt?.dataset.expiry||null,source:selectedOpt?.dataset.source||'',take:qtyGiven}];
+    } else {
+      let {data:freshLots}=await db.from('item_lots').select('*').eq('item_code',code).gt('balance',0).order('expiry',{ascending:true});
+      freshLots=freshLots||[];
+      let ordered=[...freshLots.filter(l=>String(l.id)===String(selId)),...freshLots.filter(l=>String(l.id)!==String(selId))];
+      let totalAvail=ordered.reduce((a,l)=>a+(l.balance||0),0);
+      if(totalAvail<qtyGiven){errors.push(code+' (Qty '+qtyGiven+' > Balance '+totalAvail+')');continue}
+      let need=qtyGiven;
+      for(let l of ordered){
+        if(need<=0)break;
+        let take=Math.min(need,l.balance||0);
+        if(take<=0)continue;
+        allocs.push({id:l.id,lot:l.lot||'',ref:l.ref||'',expiry:l.expiry||null,source:l.source||'',take,row:l});
+        need-=take;
+      }
+    }
+    plans.push({riId,code,qtyGiven,allocs});
+  }
+  if(errors.length){toast('Stock មិនគ្រប់: '+errors.join(', '),'error');return}
+
+  // ===== PASS 2: apply the plan =====
+  for(let pl of plans){
+    let {riId,code,qtyGiven,allocs}=pl;
     // Always fetch fresh balance from DB (avoid stale cache)
     let {data:freshItem}=await db.from('items').select('*').eq('code',code).single();
     let item=freshItem;
@@ -5484,36 +5512,42 @@ async function approveReqWithItems(reqId, itemCount){
     let {error:updErr}=await db.from('items').update({balance:newBal,stock_out:(item.stock_out||0)+qtyGiven}).eq('code',code);
     if(updErr){errors.push(code+': Balance update failed — '+updErr.message);continue;}
     await syncMonthlyStock(code,item.name||code,item.category||'','out',qtyGiven);
-    // Update item_lots
-    if(lotId&&lotId!=='virtual'){
-      let {data:el}=await db.from('item_lots').select('*').eq('id',lotId).single();
+    // Update item_lots (one update per lot used)
+    for(let al of allocs){
+      if(!al.id||al.id==='virtual')continue;
+      let el=al.row;
+      if(!el){let {data}=await db.from('item_lots').select('*').eq('id',al.id).single();el=data;}
       if(el){
-        let {error:lotErr}=await db.from('item_lots').update({qty_out:(el.qty_out||0)+qtyGiven,balance:(el.balance||0)-qtyGiven,is_active:((el.balance||0)-qtyGiven)>0}).eq('id',lotId);
+        let {error:lotErr}=await db.from('item_lots').update({qty_out:(el.qty_out||0)+al.take,balance:(el.balance||0)-al.take,is_active:((el.balance||0)-al.take)>0}).eq('id',al.id);
         if(lotErr)console.error('[approveReqWithItems] item_lots update failed:',code,lotErr.message);
       }
     }
+    let first=allocs[0];
+    let lotNoText=allocs.map(a=>a.lot||'N/A').join(', ');
     // Update request_item — qty_given here is what the Progress Badge feature
     // (and the staff Personal Ledger) reads, so a silent failure here would
     // make a genuinely-approved item look like it was never given.
     if(riId&&riId!=='legacy'){
-      let {error:riErr}=await db.from('request_items').update({qty_given:qtyGiven,status:'Approved',item_lot:lotNo,item_ref:lotRef,item_expiry:lotExpiry||null}).eq('id',riId);
+      let {error:riErr}=await db.from('request_items').update({qty_given:qtyGiven,status:'Approved',item_lot:first.lot,item_ref:first.ref,item_expiry:first.expiry||null}).eq('id',riId);
       if(riErr){
         console.error('[approveReqWithItems] request_items update failed:',code,riErr.message);
         errors.push(code+': qty_given update failed — '+riErr.message);
         continue;
       }
     }
-    // Insert stock_out_log with full traceability — ONLY confirmed-valid columns
-    // (created_by_name was included here before but that column doesn't exist
-    // in stock_out_log's real schema, so this insert was silently rejected in
-    // its entirety every time — Balance/qty_given still updated fine since
-    // those are separate calls, but the log entry never got created)
-    let {error:soErr}=await db.from('stock_out_log').insert({date:dateStr,item_code:code,item_name:item?.name||code,lot:lotNo,item_ref:lotRef||item?.ref||'',unit:item?.unit||'',size:item?.size||'',qty:qtyGiven,expiry:item?.expiry,item_expiry:lotExpiry||null,source:lotSource||item?.source||'',department:req?.department||'',ward:req?.ward||'',request_id:reqId,created_by:CU.id});
-    if(soErr){
-      console.error('[approveReqWithItems] stock_out_log insert failed:',code,soErr.message);
-      errors.push(code+': Log insert failed — '+soErr.message);
-      continue;
+    // Insert one stock_out_log row per lot used, with full traceability — ONLY
+    // confirmed-valid columns (created_by_name doesn't exist in the real schema).
+    let logFailed=false;
+    for(let al of allocs){
+      let {error:soErr}=await db.from('stock_out_log').insert({date:dateStr,item_code:code,item_name:item?.name||code,lot:al.lot,item_ref:al.ref||item?.ref||'',unit:item?.unit||'',size:item?.size||'',qty:al.take,expiry:item?.expiry,item_expiry:al.expiry||null,source:al.source||item?.source||'',department:req?.department||'',ward:req?.ward||'',request_id:reqId,created_by:CU.id});
+      if(soErr){
+        console.error('[approveReqWithItems] stock_out_log insert failed:',code,soErr.message);
+        errors.push(code+': Log insert failed — '+soErr.message);
+        logFailed=true;
+        break;
+      }
     }
+    if(logFailed)continue;
     processedCount++;
   }
   if(errors.length){toast('Stock មិនគ្រប់: '+errors.join(', '),'error');return}
@@ -5552,12 +5586,23 @@ async function disapproveItem(reqId, riId, qtyGiven, itemCode){
   // Restore the specific lot's balance too (previously only the item total was
   // restored — the lot itself stayed short by qtyGiven until a later sync,
   // which could make FEFO show an incorrect/exhausted lot after a disapprove).
-  let {data:riRow}=riId!=='legacy'?await db.from('request_items').select('item_lot').eq('id',riId).single():{data:null};
-  let lotNo=riRow?.item_lot;
-  if(lotNo){
-    let {data:lotRow}=await db.from('item_lots').select('*').eq('item_code',itemCode).eq('lot',lotNo).single();
-    if(lotRow){
-      await db.from('item_lots').update({qty_out:Math.max(0,(lotRow.qty_out||0)-qtyGiven),balance:(lotRow.balance||0)+qtyGiven,is_active:true}).eq('id',lotRow.id);
+  // An approval can now span several lots (FEFO spill-over) — restore each lot from its own log row.
+  let {data:usedLogs}=await db.from('stock_out_log').select('lot,qty').eq('request_id',reqId).eq('item_code',itemCode);
+  if(usedLogs&&usedLogs.length){
+    for(let ul of usedLogs){
+      let {data:lotRow}=await db.from('item_lots').select('*').eq('item_code',itemCode).eq('lot',ul.lot||'').maybeSingle();
+      if(lotRow){
+        await db.from('item_lots').update({qty_out:Math.max(0,(lotRow.qty_out||0)-(ul.qty||0)),balance:(lotRow.balance||0)+(ul.qty||0),is_active:true}).eq('id',lotRow.id);
+      }
+    }
+  } else {
+    let {data:riRow}=riId!=='legacy'?await db.from('request_items').select('item_lot').eq('id',riId).single():{data:null};
+    let lotNo=riRow?.item_lot;
+    if(lotNo){
+      let {data:lotRow}=await db.from('item_lots').select('*').eq('item_code',itemCode).eq('lot',lotNo).maybeSingle();
+      if(lotRow){
+        await db.from('item_lots').update({qty_out:Math.max(0,(lotRow.qty_out||0)-qtyGiven),balance:(lotRow.balance||0)+qtyGiven,is_active:true}).eq('id',lotRow.id);
+      }
     }
   }
   // Remove stock_out_log for this item+request
@@ -5585,6 +5630,10 @@ async function editApprovedItemQty(reqId, riId, itemCode, oldQty){
   if(isNaN(newQty)||newQty<0){toast('Qty មិនត្រឹមត្រូវ!','error');return}
   if(newQty===oldQty){toast('Qty ដដែល — គ្មានអ្វីផ្លាស់ប្តូរ','info');return}
   let diff=newQty-oldQty; // positive = giving more (deduct more stock), negative = giving less (restore stock)
+  {
+    let {data:lotLogs}=await db.from('stock_out_log').select('id').eq('request_id',reqId).eq('item_code',itemCode);
+    if(lotLogs&&lotLogs.length>1){toast('Item នេះត្រូវបានដកពីច្រើន Lot — សូម Disapprove រួច Approve ឡើងវិញ ជំនួសការកែ Qty','error');return}
+  }
 
   let {data:item}=await db.from('items').select('*').eq('code',itemCode).single();
   if(!item){toast('❌ រកមិនឃើញ item!','error');return}
